@@ -1,18 +1,38 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import MappingLookup from "./components/MappingLookup.jsx";
+import SearchPage from "./components/SearchPage.jsx";
+import "./App.css";
+
+const TABS = [
+  { id: "mapping", label: "IPC–BNS Mapping" },
+  { id: "search", label: "Judgment Search" },
+];
 
 function App() {
-  const [status, setStatus] = useState("loading...");
-
-  useEffect(() => {
-    fetch("http://localhost:8000/")
-      .then((r) => r.json())
-      .then((d) => setStatus(d.status))
-      .catch((err) => setStatus("error: " + err.message));
-  }, []);
+  const [activeTab, setActiveTab] = useState("mapping");
 
   return (
-    <div className="p-8 text-xl">
-      Backend says: {status}
+    <div className="app-shell">
+      <header className="app-header">
+        <p className="app-kicker">Legal Research Platform</p>
+        <nav className="app-tabs" aria-label="Main">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`app-tab${activeTab === tab.id ? " app-tab-active" : ""}`}
+              aria-current={activeTab === tab.id ? "page" : undefined}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="app-main">
+        {activeTab === "mapping" ? <MappingLookup /> : <SearchPage />}
+      </main>
     </div>
   );
 }
