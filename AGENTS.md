@@ -27,7 +27,7 @@ citation-backed QA with a citation verification safeguard.
   with own Hugging Face access token)
 - Embeddings/vector DB: complete — 533 chunks from 48 judgments, embedded
   with all-MiniLM-L6-v2 via a shared embedding function in backend/embeddings.py
-  (JudgmentEmbeddingFunction), stored in ChromaDB at backend/data/chroma_db
+  (JudgmentEmbeddingFunction), stored in ChromaDB at backend/chroma_store
   (gitignored, generated artifact, rebuild via backend/scripts/build_embeddings.py).
   Any code opening this collection MUST use the same shared embedding function
   from embeddings.py, or ChromaDB silently falls back to its own default model
@@ -36,10 +36,11 @@ citation-backed QA with a citation verification safeguard.
   returns a flat list of {case_name, court, year, ipc_sections, snippet}.
   Exposed via GET /search?q={query}&n_results={n}, registered in main.py,
   no /api prefix. Tested and confirmed working via browser/docs.
-- Semantic search frontend: not yet built (current task — SearchPage.jsx,
-  same style as MappingLookup.jsx, must deduplicate results by case_name
-  since /search returns chunk-level hits and the same case can appear
-  multiple times)
+- Semantic search frontend: complete — SearchPage.jsx, deduplicated results,
+  tabbed navigation. Quality note: MiniLM is a general-purpose model, so
+  results are a mix of strong and weak matches — demo with pre-tested
+  queries (e.g. "right of private defence", culpable-homicide-distinction
+  queries perform well) rather than arbitrary live queries.
 - Citation-backed QA: not yet built
 - Citation verifier: not yet built
 

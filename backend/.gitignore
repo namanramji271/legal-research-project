@@ -2,3 +2,6 @@
 venv/
 __pycache__/
 node_modules/
+mapping.db
+triage_output.txt
+chroma_store/
