@@ -1,11 +1,13 @@
 import { useState } from "react";
 import MappingLookup from "./components/MappingLookup.jsx";
+import QuestionPage from "./components/QuestionPage.jsx";
 import SearchPage from "./components/SearchPage.jsx";
 import "./App.css";
 
 const TABS = [
   { id: "mapping", label: "IPC–BNS Mapping" },
   { id: "search", label: "Judgment Search" },
+  { id: "question", label: "Ask a Question" },
 ];
 
 function App() {
@@ -31,7 +33,9 @@ function App() {
       </header>
 
       <main className="app-main">
-        {activeTab === "mapping" ? <MappingLookup /> : <SearchPage />}
+        {activeTab === "mapping" && <MappingLookup />}
+        {activeTab === "search" && <SearchPage />}
+        {activeTab === "question" && <QuestionPage />}
       </main>
     </div>
   );

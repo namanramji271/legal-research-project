@@ -7,3 +7,5 @@ langchain
 sentence-transformers
 groq
 datasets
+python-dotenv
+google-genai
