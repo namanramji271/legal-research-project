@@ -11,7 +11,7 @@ citation-backed QA with a citation verification safeguard.
 - Vector DB: ChromaDB
 - Embeddings: all-MiniLM-L6-v2 (chosen for speed without GPU; BGE-M3
   comparison planned for later evaluation phase, not this week)
-- LLM: Gemini API
+- LLM: Gemini API (google-genai SDK, model: gemini-2.5-flash)
 - Data: judgment corpus filtered from ILDC/NyayaAnumana for
   murder/culpable homicide/private defence (IPC 299-304, 96-106)
 
@@ -27,11 +27,13 @@ citation-backed QA with a citation verification safeguard.
   with own Hugging Face access token)
 - Embeddings/vector DB: complete — 533 chunks from 48 judgments, embedded
   with all-MiniLM-L6-v2 via a shared embedding function in backend/embeddings.py
-  (JudgmentEmbeddingFunction), stored in ChromaDB at backend/chroma_store
+  (JudgmentEmbeddingFunction), stored in ChromaDB at backend/data/chroma_db
   (gitignored, generated artifact, rebuild via backend/scripts/build_embeddings.py).
   Any code opening this collection MUST use the same shared embedding function
   from embeddings.py, or ChromaDB silently falls back to its own default model
   and results become meaningless — this caused a real bug once already.
+  NOTE: backend/chroma_store is an unrelated leftover from an early toy-RAG
+  test, not the real data — safe to delete, do not confuse the two paths.
 - Semantic search backend: complete — search_judgments() in backend/search.py
   returns a flat list of {case_name, court, year, ipc_sections, snippet}.
   Exposed via GET /search?q={query}&n_results={n}, registered in main.py,
@@ -41,19 +43,48 @@ citation-backed QA with a citation verification safeguard.
   results are a mix of strong and weak matches — demo with pre-tested
   queries (e.g. "right of private defence", culpable-homicide-distinction
   queries perform well) rather than arbitrary live queries.
-- Citation-backed QA: not yet built
-- Citation verifier: not yet built
+- Citation-backed QA backend: complete — backend/qa.py, ask_question()
+  retrieves top-n chunks via search_judgments() (n_results=10 default,
+  increased from 5 since 5 was too few to reliably surface good context),
+  builds a grounded prompt instructing Gemini to answer only from provided
+  context and cite exact case names, calls Gemini, returns
+  {answer, verified, sources_used, unverified_citations, retrieved_sources}.
+  Exposed via POST /ask (JSON body: {question, n_results}), no /api prefix.
+  Tested directly via Python — confirmed real, grounded answers with correct
+  citations on well-supported questions (e.g. "When does the right of
+  private defence exceed reasonable force?"), and confirmed honest "not
+  enough information" responses rather than hallucination when retrieval
+  context is weak.
+  KNOWN ISSUE: sources_used can contain duplicate case names (same case
+  cited multiple times in one answer) — extract_cited_cases() needs to
+  deduplicate while preserving first-occurrence order.
+  STILL TODO: router not yet registered in main.py — needs
+  `from qa import router as qa_router` and `app.include_router(qa_router)`.
+- Citation verifier: complete — folded into backend/qa.py via
+  find_unverifiable_citations(), which scans the answer text for
+  ILDC-case-name-shaped strings (regex pattern "ILDC case \d{4}_\d+") not
+  present in the retrieved chunk set, and flags them. Response's `verified`
+  field is False if any unverifiable citation is found. Tested: returns
+  verified=True with zero unverified citations on a well-supported question.
+- Citation-backed QA frontend: not yet built (current task — QuestionPage.jsx
+  or similar, same style as SearchPage.jsx/MappingLookup.jsx, must visibly
+  show the verified/unverified state, since this is the project's key
+  differentiating safety feature)
 
 ## Conventions
 - Backend lives in /backend, frontend in /frontend
 - API routes have NO prefix — e.g. /mapping/ipc/{section}, not
-  /api/mapping/ipc/{section}. Keep all future routes (/ask, etc.)
-  consistent with this, no /api prefix.
+  /api/mapping/ipc/{section}. Keep all future routes consistent with this,
+  no /api prefix.
 - Mapping data source of truth is backend/data/ipc_bns_mapping.csv —
   backend/data/mapping.db is a generated SQLite file built from it on
   server startup (auto-rebuilds if the CSV is newer than the DB), and
   is gitignored, not committed
 - Mapper response shape: {ipc_section, bns_section, title, notes}
 - Search response shape: list of {case_name, court, year, ipc_sections, snippet}
+- QA endpoint is POST /ask (not GET — question text as a JSON body, not a
+  URL query param), request body: {question: string, n_results?: number}
+- QA response shape: {answer, verified, sources_used, unverified_citations,
+  retrieved_sources}
 - Citation verifier must check every LLM-cited case name against
   retrieved chunk metadata before returning a response as verified
