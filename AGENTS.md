@@ -38,11 +38,26 @@ citation-backed QA with a citation verification safeguard.
   returns a flat list of {case_name, court, year, ipc_sections, snippet}.
   Exposed via GET /search?q={query}&n_results={n}, registered in main.py,
   no /api prefix. Tested and confirmed working via browser/docs.
+  RELEVANCE THRESHOLD (Day 4): SEARCH_DISTANCE_THRESHOLD = 0.65 (module-level
+  constant in search.py). Chroma cosine distance, lower = more similar;
+  chunks with distance > 0.65 are discarded inside search_judgments() before
+  the response is built. Distance itself is NOT exposed in the response
+  shape — filtering is internal only. IMPORTANT BEHAVIORAL CHANGE: n_results
+  is now the number of candidates fetched from Chroma before filtering, not
+  a guaranteed return count — a query can return fewer than n_results
+  (including zero) once weak matches are dropped. Manually tested:
+  on-topic queries ("murder during self defence", "culpable homicide sudden
+  provocation") return relevant results; off-topic/gibberish queries
+  ("dgadfad sdfsdf", "culprit") correctly return no matches instead of
+  forcing weak matches through. No database/embedding changes were made.
 - Semantic search frontend: complete — SearchPage.jsx, deduplicated results,
   tabbed navigation. Quality note: MiniLM is a general-purpose model, so
   results are a mix of strong and weak matches — demo with pre-tested
   queries (e.g. "right of private defence", culpable-homicide-distinction
-  queries perform well) rather than arbitrary live queries.
+  queries perform well) rather than arbitrary live queries. Post-threshold,
+  weak matches are filtered before reaching the frontend, but empty-result
+  states should still be handled gracefully in the UI (verify SearchPage.jsx
+  shows a clear "no results" state, not a blank list).
 - Citation-backed QA backend: complete — backend/qa.py, ask_question()
   retrieves top-n chunks via search_judgments() (n_results=10 default,
   increased from 5 since 5 was too few to reliably surface good context),
@@ -55,21 +70,28 @@ citation-backed QA with a citation verification safeguard.
   private defence exceed reasonable force?"), and confirmed honest "not
   enough information" responses rather than hallucination when retrieval
   context is weak.
+  NOTE (Day 4): since search_judgments() now applies SEARCH_DISTANCE_THRESHOLD,
+  ask_question()'s existing "no relevant judgments found" empty-chunks path
+  can now trigger even when Chroma returned n_results candidates, if all of
+  them fell above the 0.65 distance cutoff. This was not re-tested directly
+  against the QA endpoint this session — worth a follow-up check with a
+  deliberately vague/off-topic question through POST /ask specifically
+  (not just search_judgments()) to confirm the empty-chunks message still
+  reads correctly end-to-end.
   KNOWN ISSUE: sources_used can contain duplicate case names (same case
   cited multiple times in one answer) — extract_cited_cases() needs to
   deduplicate while preserving first-occurrence order.
-  STILL TODO: router not yet registered in main.py — needs
-  `from qa import router as qa_router` and `app.include_router(qa_router)`.
 - Citation verifier: complete — folded into backend/qa.py via
   find_unverifiable_citations(), which scans the answer text for
   ILDC-case-name-shaped strings (regex pattern "ILDC case \d{4}_\d+") not
   present in the retrieved chunk set, and flags them. Response's `verified`
   field is False if any unverifiable citation is found. Tested: returns
   verified=True with zero unverified citations on a well-supported question.
-- Citation-backed QA frontend: not yet built (current task — QuestionPage.jsx
-  or similar, same style as SearchPage.jsx/MappingLookup.jsx, must visibly
-  show the verified/unverified state, since this is the project's key
-  differentiating safety feature)
+- Citation-backed QA frontend: complete — QuestionPage.jsx, shows verified/
+  unverified banner, deduplicated sources list. Tested and confirmed working
+  on both a well-supported question (graceful honest answer) and a
+  deliberately off-topic question (correctly declined rather than
+  hallucinating — verifier confirmed working as intended).
 
 ## Conventions
 - Backend lives in /backend, frontend in /frontend
@@ -82,9 +104,19 @@ citation-backed QA with a citation verification safeguard.
   is gitignored, not committed
 - Mapper response shape: {ipc_section, bns_section, title, notes}
 - Search response shape: list of {case_name, court, year, ipc_sections, snippet}
+  (post-threshold: may be shorter than requested n_results, including empty)
 - QA endpoint is POST /ask (not GET — question text as a JSON body, not a
   URL query param), request body: {question: string, n_results?: number}
 - QA response shape: {answer, verified, sources_used, unverified_citations,
   retrieved_sources}
 - Citation verifier must check every LLM-cited case name against
   retrieved chunk metadata before returning a response as verified
+
+## Known repo hygiene issues (flag for cleanup)
+- backend/data/judgments.jsonl is currently committed to git, despite the
+  note above that it shouldn't be (IL-TUR license restricts redistribution).
+  Needs: git rm --cached backend/data/judgments.jsonl, then confirm it's
+  covered by backend/.gitignore.
+- backend/chroma_store/ is committed despite being listed in
+  backend/.gitignore (added before the gitignore rule existed). Needs:
+  git rm -r --cached backend/chroma_store

@@ -10,6 +10,8 @@ from fastapi import APIRouter, Query
 
 from embeddings import CHROMA_DB_PATH, COLLECTION_NAME, get_embedding_function
 
+SEARCH_DISTANCE_THRESHOLD = 0.65
+
 router = APIRouter()
 
 
@@ -56,9 +58,15 @@ def search_judgments(query: str, n_results: int = 5) -> list[dict[str, Any]]:
     )
     documents = (raw_results.get("documents") or [[]])[0] or []
     metadatas = (raw_results.get("metadatas") or [[]])[0] or []
+    distances = (raw_results.get("distances") or [[]])[0] or []
+    relevant_results = [
+        (document, metadata, distance)
+        for document, metadata, distance in zip(documents, metadatas, distances)
+        if distance is not None and distance <= SEARCH_DISTANCE_THRESHOLD
+    ]
 
     results: list[dict[str, Any]] = []
-    for document, metadata in zip(documents, metadatas):
+    for document, metadata, _distance in relevant_results:
         metadata = metadata or {}
         results.append(
             {
