@@ -5,3 +5,6 @@ node_modules/
 mapping.db
 triage_output.txt
 chroma_store/
+chroma_db/
+chroma_db_bge/
+data/judgments.jsonl
