@@ -8,7 +8,14 @@ from typing import Any
 import chromadb
 from fastapi import APIRouter, Query
 
-from embeddings import CHROMA_DB_PATH, COLLECTION_NAME, get_embedding_function
+from embeddings import (
+    BGE_CHROMA_DB_PATH,
+    BGE_COLLECTION_NAME,
+    CHROMA_DB_PATH,
+    COLLECTION_NAME,
+    get_bge_embedding_function,
+    get_embedding_function,
+)
 
 SEARCH_DISTANCE_THRESHOLD = 0.65
 
@@ -21,6 +28,15 @@ def get_judgment_collection():
     return client.get_collection(
         name=COLLECTION_NAME,
         embedding_function=get_embedding_function(),
+    )
+
+
+def get_bge_judgment_collection():
+    """Open the persisted BGE-M3 collection with its build-time function."""
+    client = chromadb.PersistentClient(path=str(BGE_CHROMA_DB_PATH))
+    return client.get_collection(
+        name=BGE_COLLECTION_NAME,
+        embedding_function=get_bge_embedding_function(),
     )
 
 
@@ -52,6 +68,41 @@ def search_judgments(query: str, n_results: int = 5) -> list[dict[str, Any]]:
     if n_results <= 0:
         raise ValueError("n_results must be positive")
     raw_results = get_judgment_collection().query(
+        query_texts=[query],
+        n_results=n_results,
+        include=["documents", "metadatas", "distances"],
+    )
+    documents = (raw_results.get("documents") or [[]])[0] or []
+    metadatas = (raw_results.get("metadatas") or [[]])[0] or []
+    distances = (raw_results.get("distances") or [[]])[0] or []
+    relevant_results = [
+        (document, metadata, distance)
+        for document, metadata, distance in zip(documents, metadatas, distances)
+        if distance is not None and distance <= SEARCH_DISTANCE_THRESHOLD
+    ]
+
+    results: list[dict[str, Any]] = []
+    for document, metadata, _distance in relevant_results:
+        metadata = metadata or {}
+        results.append(
+            {
+                "case_name": metadata.get("case_name", ""),
+                "court": metadata.get("court", ""),
+                "year": metadata.get("year"),
+                "ipc_sections": _ipc_sections(metadata.get("ipc_sections")),
+                "snippet": _snippet(document or ""),
+            }
+        )
+    return results
+
+
+def search_judgments_bge(query: str, n_results: int = 5) -> list[dict[str, Any]]:
+    """Return flat, frontend-ready records from the BGE-M3 judgment collection."""
+    if not query.strip():
+        raise ValueError("query must not be empty")
+    if n_results <= 0:
+        raise ValueError("n_results must be positive")
+    raw_results = get_bge_judgment_collection().query(
         query_texts=[query],
         n_results=n_results,
         include=["documents", "metadatas", "distances"],
