@@ -12,6 +12,22 @@ from chromadb.utils.embedding_functions import register_embedding_function
 MODEL_NAME = "all-MiniLM-L6-v2"
 COLLECTION_NAME = "judgment_chunks"
 CHROMA_DB_PATH = Path(__file__).resolve().parent / "data" / "chroma_db"
+BGE_MODEL_NAME = "BAAI/bge-m3"
+BGE_COLLECTION_NAME = "judgments_bge_m3"
+BGE_CHROMA_DB_PATH = Path(__file__).resolve().parent / "data" / "chroma_db_bge"
+
+
+@lru_cache(maxsize=None)
+def _get_bge_model(model_name: str = BGE_MODEL_NAME) -> Any:
+    """Load a BGE-M3 model once per model name for the current process."""
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as error:
+        raise SystemExit(
+            "Missing embedding dependencies. Install with: "
+            "pip install -r backend/requirements.txt"
+        ) from error
+    return SentenceTransformer(model_name)
 
 
 @register_embedding_function
@@ -57,7 +73,47 @@ class JudgmentEmbeddingFunction(EmbeddingFunction[Documents]):
         return cls(model_name=str(config.get("model_name", MODEL_NAME)))
 
 
+@register_embedding_function
+class BGEM3EmbeddingFunction(EmbeddingFunction[Documents]):
+    """Embed documents and queries with the BAAI BGE-M3 sentence-transformers model."""
+
+    def __init__(self, model_name: str = BGE_MODEL_NAME) -> None:
+        self.model_name = model_name
+        self._model = _get_bge_model(model_name)
+
+    def __call__(self, input: Documents) -> Embeddings:
+        """Implement Chroma's embedding-function protocol for documents and queries."""
+        if not input:
+            return []
+        return self._model.encode(
+            input,
+            batch_size=32,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        ).tolist()
+
+    @classmethod
+    def name(cls) -> str:
+        """Return Chroma's stable registry name for this embedding function."""
+        return "judgment-bge-m3"
+
+    def get_config(self) -> dict[str, Any]:
+        """Return only serializable settings needed to recreate this function."""
+        return {"model_name": self.model_name}
+
+    @classmethod
+    def build_from_config(cls, config: dict[str, Any]) -> "BGEM3EmbeddingFunction":
+        """Recreate the function when Chroma restores collection configuration."""
+        return cls(model_name=str(config.get("model_name", BGE_MODEL_NAME)))
+
+
 @lru_cache(maxsize=1)
 def get_embedding_function() -> JudgmentEmbeddingFunction:
     """Load MiniLM once per process and reuse it for every Chroma operation."""
     return JudgmentEmbeddingFunction()
+
+
+@lru_cache(maxsize=1)
+def get_bge_embedding_function() -> BGEM3EmbeddingFunction:
+    """Load BGE-M3 once per process and reuse it for BGE Chroma operations."""
+    return BGEM3EmbeddingFunction()
