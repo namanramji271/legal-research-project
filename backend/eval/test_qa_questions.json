@@ -1,0 +1,54 @@
+[
+  {
+    "question": "When can a person lawfully use force in private defence of person or property?",
+    "expected_answerable": true
+  },
+  {
+    "question": "What are the limits on using force in the right of private defence?",
+    "expected_answerable": true
+  },
+  {
+    "question": "When does the right of private defence of property arise under the IPC?",
+    "expected_answerable": true
+  },
+  {
+    "question": "How is culpable homicide defined under IPC Section 299?",
+    "expected_answerable": true
+  },
+  {
+    "question": "How do courts distinguish murder under IPC Section 300 from culpable homicide?",
+    "expected_answerable": true
+  },
+  {
+    "question": "How does IPC Section 301 apply when a person other than the intended victim is killed?",
+    "expected_answerable": true
+  },
+  {
+    "question": "How can circumstantial evidence support a murder conviction under IPC Section 302?",
+    "expected_answerable": true
+  },
+  {
+    "question": "What factors determine death penalty versus life imprisonment for murder under IPC Section 302?",
+    "expected_answerable": true
+  },
+  {
+    "question": "When is culpable homicide punished under IPC Section 304 rather than as murder?",
+    "expected_answerable": true
+  },
+  {
+    "question": "How is Goods and Services Tax calculated for a small business in India?",
+    "expected_answerable": false
+  },
+  {
+    "question": "What are the bail requirements for an offence under the NDPS Act?",
+    "expected_answerable": false
+  },
+  {
+    "question": "What are the legal grounds for divorce under the Hindu Marriage Act?",
+    "expected_answerable": false
+  },
+  {
+    "question": "Which BNS section replaces IPC Section 420 for cheating?",
+    "expected_answerable": false
+  }
+]

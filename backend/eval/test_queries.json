@@ -1,0 +1,62 @@
+[
+  {
+    "query": "When can a person lawfully use force in private defence of person or property?",
+    "relevant_cases": ["ILDC case 1967_328"]
+  },
+  {
+    "query": "What are the limits of the right of private defence under IPC Sections 96 to 106?",
+    "relevant_cases": ["ILDC case 1967_328"]
+  },
+  {
+    "query": "How is culpable homicide defined under IPC Section 299?",
+    "relevant_cases": ["ILDC case 1964_288", "ILDC case 1978_213"]
+  },
+  {
+    "query": "What mental element is required to establish culpable homicide?",
+    "relevant_cases": ["ILDC case 1964_288", "ILDC case 1978_213"]
+  },
+  {
+    "query": "How do courts distinguish murder under IPC Section 300 from culpable homicide?",
+    "relevant_cases": ["ILDC case 1964_288", "ILDC case 1972_80", "ILDC case 1978_188", "ILDC case 1978_213"]
+  },
+  {
+    "query": "When does a culpable homicide amount to murder under IPC Section 300?",
+    "relevant_cases": ["ILDC case 1964_288", "ILDC case 1972_80", "ILDC case 1978_188", "ILDC case 1978_213"]
+  },
+  {
+    "query": "How does IPC Section 301 apply when the person killed was not the intended victim?",
+    "relevant_cases": ["ILDC case 1964_288"]
+  },
+  {
+    "query": "What is the legal effect of causing the death of a person other than the intended target under IPC Section 301?",
+    "relevant_cases": ["ILDC case 1964_288"]
+  },
+  {
+    "query": "What factors determine death penalty versus life imprisonment for murder under IPC 302?",
+    "relevant_cases": ["ILDC case 2002_580", "ILDC case 1953_78", "ILDC case 1955_26", "ILDC case 1954_78", "ILDC case 1961_222", "ILDC case 1966_254", "ILDC case 1974_100", "ILDC case 1973_183", "ILDC case 1970_171"]
+  },
+  {
+    "query": "How do courts rely on circumstantial evidence alone to convict under IPC 302?",
+    "relevant_cases": ["ILDC case 2002_580", "ILDC case 1952_19", "ILDC case 1954_89", "ILDC case 1962_319", "ILDC case 1972_117", "ILDC case 1973_177", "ILDC case 1971_505", "ILDC case 1970_171", "ILDC case 1968_363"]
+  },
+  {
+    "query": "How does common intention under Section 34 affect murder liability under IPC 302?",
+    "relevant_cases": ["ILDC case 2013_35", "ILDC case 2002_580", "ILDC case 1953_78", "ILDC case 1952_19", "ILDC case 1950_28", "ILDC case 1955_0", "ILDC case 1955_26", "ILDC case 1954_78", "ILDC case 1954_104", "ILDC case 1961_222", "ILDC case 1966_254", "ILDC case 1974_112", "ILDC case 1974_414", "ILDC case 1972_117", "ILDC case 1972_231", "ILDC case 1972_277", "ILDC case 1973_183", "ILDC case 1973_408", "ILDC case 1973_411", "ILDC case 1970_1", "ILDC case 1978_188"]
+  },
+  {
+    "query": "How is a dying declaration used as evidence in a murder case under IPC 302?",
+    "relevant_cases": ["ILDC case 1953_78", "ILDC case 1957_131", "ILDC case 1972_231", "ILDC case 1972_571", "ILDC case 1973_408", "ILDC case 1970_171"]
+  },
+  {
+    "query": "How does motive or premeditation affect a murder conviction under IPC 302?",
+    "relevant_cases": ["ILDC case 2013_35", "ILDC case 2002_580", "ILDC case 1953_78", "ILDC case 1952_19", "ILDC case 1950_28", "ILDC case 1955_26", "ILDC case 1954_78", "ILDC case 1965_6", "ILDC case 1961_222", "ILDC case 1972_80", "ILDC case 1973_411", "ILDC case 1971_505", "ILDC case 1970_171", "ILDC case 1978_116", "ILDC case 1978_213"]
+  },
+  {
+    "query": "When is culpable homicide punished under IPC Section 304 rather than as murder?",
+    "relevant_cases": ["ILDC case 1952_93", "ILDC case 1957_64", "ILDC case 1963_230", "ILDC case 1962_165", "ILDC case 1973_408", "ILDC case 1971_142", "ILDC case 1968_154", "ILDC case 1978_188", "ILDC case 1978_213"]
+  },
+  {
+    "query": "What sentencing issues arise for culpable homicide not amounting to murder under IPC Section 304?",
+    "relevant_cases": ["ILDC case 1952_93", "ILDC case 1957_64", "ILDC case 1963_230", "ILDC case 1962_165", "ILDC case 1973_408", "ILDC case 1971_142", "ILDC case 1968_154", "ILDC case 1978_188", "ILDC case 1978_213"]
+  }
+]
