@@ -165,6 +165,55 @@ Formal evaluation replacing manual spot-checks. All files in backend/eval/.
     hit mid-evaluation; reproducing this eval may require spreading runs
     across multiple days or upgrading the API plan.
 
+## BGE-M3 vs MiniLM comparison (in progress)
+Goal: compare retrieval quality of BGE-M3 against the existing MiniLM setup,
+using the same evaluation harness built in the Evaluation section above.
+MiniLM's existing collection/index is untouched throughout — BGE-M3 lives in
+fully separate files/paths so both can coexist and be compared side by side.
+
+STATUS: embedding function + BGE-M3 collection built and confirmed working.
+NOT YET DONE: parallel search function, comparison eval script, actual
+results.
+
+- backend/embeddings.py: added `BGEM3EmbeddingFunction` (BAAI/bge-m3 via
+  sentence-transformers), conforming to the same Chroma embedding function
+  interface as the existing `JudgmentEmbeddingFunction` (name(), get_config(),
+  build_from_config(), __call__). Added `BGE_COLLECTION_NAME =
+  "judgments_bge_m3"` and `BGE_CHROMA_DB_PATH = backend/data/chroma_db_bge`
+  (separate from the MiniLM collection/path — never overlaps). Added
+  `_get_bge_model()` / `get_bge_embedding_function()` as a process-wide cached
+  accessor so the ~2.27GB model loads exactly once, not per batch/call.
+  LESSON LEARNED: an earlier version let Chroma invoke the embedding function
+  internally per `add()` batch, which reloaded model weights repeatedly and
+  inflated build time from ~37min to ~50min for no benefit — fixed by
+  embedding each batch explicitly up front and passing raw `embeddings=` to
+  Chroma instead of letting Chroma call the embedding function itself.
+- backend/scripts/build_embeddings_bge.py: mirrors build_embeddings.py but
+  targets the BGE-M3 collection/path above. CONFIRMED WORKING: successfully
+  built all 533 chunks (same chunking as the MiniLM build, via the shared
+  build_chunk_records() logic) into backend/data/chroma_db_bge/judgments_bge_m3.
+  TIMING (CPU only, no GPU): ~37-38 minutes (2262.7s) for 533 chunks after the
+  model-reload fix, vs. MiniLM's near-instant embedding for the same corpus.
+  This is a genuine, citable speed trade-off for the paper — not a bug to
+  chase further; BGE-M3 is simply a much larger model doing real dense
+  inference per chunk on CPU.
+
+NEXT STEPS (not yet done):
+1. Add `search_judgments_bge(query, n_results=5)` to backend/search.py,
+   mirroring `search_judgments()` exactly (same 0.65 threshold logic, same
+   response shape) but querying the BGE-M3 collection instead of MiniLM's.
+   Do not modify `search_judgments()` or the existing /search route.
+2. Create backend/eval/evaluate_retrieval_comparison.py, based on
+   backend/eval/evaluate_retrieval.py. For each of the 15 labeled queries in
+   backend/eval/test_queries.json, run both search_judgments() (MiniLM) and
+   search_judgments_bge() (BGE-M3), compute precision@5/recall@5/reciprocal
+   rank for each, print a side-by-side per-query comparison, and print
+   overall mean precision@5/recall@5/MRR for both models.
+3. Run it, record actual precision/recall/MRR numbers for BGE-M3 vs MiniLM's
+   existing 0.307/0.494/0.595 (from findings.md), and write up a comparison
+   finding (e.g. backend/eval/embedding_comparison_findings.md) — including
+   both accuracy and the ~37min build time trade-off.
+
 ## Conventions
 - Backend lives in /backend, frontend in /frontend
 - API routes have NO prefix — e.g. /mapping/ipc/{section}, not
