@@ -9,3 +9,4 @@ groq
 datasets
 python-dotenv
 google-genai
+rank_bm25
