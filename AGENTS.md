@@ -31,7 +31,12 @@ citation-backed QA with a citation verification safeguard.
 - Embeddings/vector DB: complete — 533 chunks from 48 judgments, embedded
   with all-MiniLM-L6-v2 via a shared embedding function in backend/embeddings.py
   (JudgmentEmbeddingFunction), stored in ChromaDB at backend/data/chroma_db
-  (gitignored, generated artifact, rebuild via backend/scripts/build_embeddings.py).
+  (generated artifact, rebuild via backend/scripts/build_embeddings.py).
+  CORRECTED: backend/.gitignore originally listed the wrong path
+  (chroma_store/, an unrelated leftover folder) instead of the real
+  chroma_db/ path — fixed during the BGE-M3 comparison work below, so
+  chroma_db/, chroma_db_bge/, and data/judgments.jsonl are now all
+  correctly gitignored.
   Any code opening this collection MUST use the same shared embedding function
   from embeddings.py, or ChromaDB silently falls back to its own default model
   and results become meaningless — this caused a real bug once already.
@@ -165,54 +170,63 @@ Formal evaluation replacing manual spot-checks. All files in backend/eval/.
     hit mid-evaluation; reproducing this eval may require spreading runs
     across multiple days or upgrading the API plan.
 
-## BGE-M3 vs MiniLM comparison (in progress)
+## BGE-M3 vs MiniLM comparison — complete
 Goal: compare retrieval quality of BGE-M3 against the existing MiniLM setup,
 using the same evaluation harness built in the Evaluation section above.
-MiniLM's existing collection/index is untouched throughout — BGE-M3 lives in
-fully separate files/paths so both can coexist and be compared side by side.
+MiniLM's existing collection/index was untouched throughout — BGE-M3 lives in
+fully separate files/paths (backend/data/chroma_db_bge, judgments_bge_m3
+collection) so both coexist and can be compared side by side.
 
-STATUS: embedding function + BGE-M3 collection built and confirmed working.
-NOT YET DONE: parallel search function, comparison eval script, actual
-results.
+- backend/embeddings.py: `BGEM3EmbeddingFunction` (BAAI/bge-m3 via
+  sentence-transformers), same Chroma embedding function interface as
+  `JudgmentEmbeddingFunction`. `BGE_COLLECTION_NAME = "judgments_bge_m3"`,
+  `BGE_CHROMA_DB_PATH = backend/data/chroma_db_bge`. `_get_bge_model()` /
+  `get_bge_embedding_function()` cache the model process-wide so it loads
+  once, not per batch/call (an earlier version let Chroma invoke the
+  embedding function internally per add() batch, which reloaded the
+  ~2.27GB model repeatedly and inflated build time from ~37min to ~50min
+  for no benefit — fixed by embedding each batch explicitly and passing
+  raw embeddings= to Chroma).
+- backend/scripts/build_embeddings_bge.py: builds the BGE-M3 collection
+  from the same corpus/chunking as the MiniLM build. CONFIRMED WORKING:
+  533 chunks built successfully. TIMING (CPU only, no GPU): ~37-38 minutes
+  (2262.7s), vs. MiniLM's near-instant build — a real, citable cost
+  trade-off, not a bug.
+- backend/search.py: `search_judgments_bge(query, n_results=5)` mirrors
+  `search_judgments()` exactly (same 0.65 threshold, same response shape),
+  querying the BGE-M3 collection instead. `search_judgments()` and the
+  `/search` route are unchanged. Manually verified working via a debug
+  script — plausible, on-topic results for a private-defence query.
+- backend/eval/evaluate_retrieval_comparison.py: runs both
+  search_judgments() and search_judgments_bge() against all 15 labeled
+  queries in test_queries.json, reports precision@5/recall@5/MRR for both.
 
-- backend/embeddings.py: added `BGEM3EmbeddingFunction` (BAAI/bge-m3 via
-  sentence-transformers), conforming to the same Chroma embedding function
-  interface as the existing `JudgmentEmbeddingFunction` (name(), get_config(),
-  build_from_config(), __call__). Added `BGE_COLLECTION_NAME =
-  "judgments_bge_m3"` and `BGE_CHROMA_DB_PATH = backend/data/chroma_db_bge`
-  (separate from the MiniLM collection/path — never overlaps). Added
-  `_get_bge_model()` / `get_bge_embedding_function()` as a process-wide cached
-  accessor so the ~2.27GB model loads exactly once, not per batch/call.
-  LESSON LEARNED: an earlier version let Chroma invoke the embedding function
-  internally per `add()` batch, which reloaded model weights repeatedly and
-  inflated build time from ~37min to ~50min for no benefit — fixed by
-  embedding each batch explicitly up front and passing raw `embeddings=` to
-  Chroma instead of letting Chroma call the embedding function itself.
-- backend/scripts/build_embeddings_bge.py: mirrors build_embeddings.py but
-  targets the BGE-M3 collection/path above. CONFIRMED WORKING: successfully
-  built all 533 chunks (same chunking as the MiniLM build, via the shared
-  build_chunk_records() logic) into backend/data/chroma_db_bge/judgments_bge_m3.
-  TIMING (CPU only, no GPU): ~37-38 minutes (2262.7s) for 533 chunks after the
-  model-reload fix, vs. MiniLM's near-instant embedding for the same corpus.
-  This is a genuine, citable speed trade-off for the paper — not a bug to
-  chase further; BGE-M3 is simply a much larger model doing real dense
-  inference per chunk on CPU.
+### Results (backend/eval/embedding_comparison_findings.md)
+| Model | precision@5 | recall@5 | MRR |
+| --- | ---: | ---: | ---: |
+| MiniLM | 0.307 | 0.494 | 0.595 |
+| BGE-M3 | 0.360 | 0.524 | 0.644 |
 
-NEXT STEPS (not yet done):
-1. Add `search_judgments_bge(query, n_results=5)` to backend/search.py,
-   mirroring `search_judgments()` exactly (same 0.65 threshold logic, same
-   response shape) but querying the BGE-M3 collection instead of MiniLM's.
-   Do not modify `search_judgments()` or the existing /search route.
-2. Create backend/eval/evaluate_retrieval_comparison.py, based on
-   backend/eval/evaluate_retrieval.py. For each of the 15 labeled queries in
-   backend/eval/test_queries.json, run both search_judgments() (MiniLM) and
-   search_judgments_bge() (BGE-M3), compute precision@5/recall@5/reciprocal
-   rank for each, print a side-by-side per-query comparison, and print
-   overall mean precision@5/recall@5/MRR for both models.
-3. Run it, record actual precision/recall/MRR numbers for BGE-M3 vs MiniLM's
-   existing 0.307/0.494/0.595 (from findings.md), and write up a comparison
-   finding (e.g. backend/eval/embedding_comparison_findings.md) — including
-   both accuracy and the ~37min build time trade-off.
+BGE-M3 improves all three aggregate metrics modestly. The improvement is
+NOT uniform across queries (queries 6, 11, 12, 13 saw BGE-M3 tie or
+underperform MiniLM) — it is concentrated in the previously-weak IPC 304
+queries: MiniLM scored 0.000/0.000 precision/recall on both IPC 304
+queries (see findings.md), BGE-M3 improved these to 0.400/0.222 each,
+supporting the findings.md hypothesis that stronger embeddings handle
+comparative/negation phrasing ("not amounting to murder") better.
+CONCLUSION: not an unconditional upgrade — the ~37min build-time cost is
+real, and gains are topic-specific. Recommended as a future-work item
+(potentially combined with corpus expansion for IPC 304, or a hybrid
+dense+BM25 approach) rather than an immediate wholesale switch.
+
+## Repo hygiene — resolved
+backend/.gitignore previously listed the wrong path (chroma_store/, an
+unrelated leftover folder from early testing) instead of the real active
+paths. Fixed: chroma_db/, chroma_db_bge/, and data/judgments.jsonl are now
+correctly gitignored and untracked. git status confirmed clean working
+tree after the fix. judgments.jsonl was already untracked prior to this
+fix (git rm --cached had been run earlier) — the gitignore update just
+prevents it from being accidentally re-added.
 
 ## Conventions
 - Backend lives in /backend, frontend in /frontend
@@ -240,12 +254,3 @@ NEXT STEPS (not yet done):
   phrasing variants before trusting the aggregate metric — a narrow regex
   can silently misclassify correct behavior as a failure (happened once
   already with the "enough information" pattern).
-
-## Known repo hygiene issues (flag for cleanup)
-- backend/data/judgments.jsonl is currently committed to git, despite the
-  note above that it shouldn't be (IL-TUR license restricts redistribution).
-  Needs: git rm --cached backend/data/judgments.jsonl, then confirm it's
-  covered by backend/.gitignore.
-- backend/chroma_store/ is committed despite being listed in
-  backend/.gitignore (added before the gitignore rule existed). Needs:
-  git rm -r --cached backend/chroma_store
