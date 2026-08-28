@@ -8,6 +8,7 @@ from typing import Any
 import chromadb
 from fastapi import APIRouter, Query
 
+from bm25_search import bm25_search
 from embeddings import (
     BGE_CHROMA_DB_PATH,
     BGE_COLLECTION_NAME,

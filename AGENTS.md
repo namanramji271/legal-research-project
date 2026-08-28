@@ -219,6 +219,68 @@ real, and gains are topic-specific. Recommended as a future-work item
 (potentially combined with corpus expansion for IPC 304, or a hybrid
 dense+BM25 approach) rather than an immediate wholesale switch.
 
+## Hybrid search (BM25 + dense RRF) — complete
+Goal: test whether combining BM25 keyword retrieval with dense (MiniLM)
+retrieval via reciprocal rank fusion (RRF) would outperform either alone,
+motivated by the IPC 304 negation-phrasing weakness found in the retrieval
+evaluation above.
+
+- backend/bm25_search.py: `bm25_search(query, n_results=10)` — BM25 index
+  (rank_bm25 library) built once from the same 533 chunks/chunking as the
+  dense index (reuses build_chunk_records()), cached in memory, same
+  response shape as search_judgments(). Deduplicates to unique case names
+  in first-occurrence order, same pattern as search_judgments().
+- backend/hybrid_search.py: `hybrid_search(query, n_results=5)` — fetches
+  15 candidates from both search_judgments() (dense) and bm25_search(),
+  deduplicates each to unique case names in first-occurrence order, then
+  merges via RRF (k=60): score = sum(1/(60+rank)) across whichever list(s)
+  a case appears in, sorted descending, top n_results returned.
+  LESSON LEARNED: an early version computed RRF ranks on the raw
+  (un-deduplicated) result lists before removing duplicate chunks from the
+  same case — this could inflate a relevant case's effective rank whenever
+  duplicate chunks from an irrelevant case preceded it. Fixed by
+  deduplicating both input lists to unique case names first, then assigning
+  RRF ranks on the deduplicated order.
+- backend/eval/evaluate_retrieval_hybrid.py: three-way comparison
+  (MiniLM/BM25/Hybrid) against the same 15 labeled queries in
+  test_queries.json.
+
+### Results (backend/eval/hybrid_search_findings.md)
+| Method | precision@5 | recall@5 | MRR |
+| --- | ---: | ---: | ---: |
+| MiniLM dense | 0.307 | 0.494 | 0.595 |
+| BM25 keyword | 0.413 | 0.548 | 0.733 |
+| Hybrid RRF | 0.320 | 0.475 | 0.645 |
+
+KEY FINDING (counter to the original hypothesis): BM25 alone outperforms
+BOTH MiniLM dense retrieval AND the RRF hybrid, on every metric. Explanation:
+these legal queries share highly specific, formal vocabulary with the
+judgment text itself (section numbers, doctrinal phrases like "dying
+declaration"), which favors literal keyword match over semantic
+approximation. Naive unweighted RRF underperforms pure BM25 because rank
+fusion rewards agreement between two rankers of similar quality — when one
+ranker (BM25) is consistently stronger, blending in the weaker one (dense)
+dilutes rather than improves the ranking, a known limitation of unweighted
+rank fusion.
+
+DATA QUALITY FINDING (discovered during BM25 implementation): 37 of 48
+judgments (77%) contain text corruption from the source ILDC dataset's
+anonymization pipeline — common words are garbled (e.g. "not" → "number",
+"court" → "companyrt", "convicted" → "companyvicted"). This is a pre-existing
+corpus artifact, not something introduced by this project. It likely limits
+BM25's ability to exploit negation phrasing specifically (e.g. "not
+amounting to murder" reads as "number amounting to murder" in most of the
+corpus), even though BM25 still won overall. Documented as a corpus
+limitation; not fixed (targeted find-and-replace was judged too risky to
+attempt safely across 37 judgments in remaining project time).
+
+CONCLUSION / recommendation: BM25 is the strongest single retrieval method
+found so far for this domain — worth considering as primary retrieval, or
+revisiting with a *weighted* fusion (giving BM25 more influence than dense)
+rather than unweighted RRF. This directly contradicts the original hybrid-
+search hypothesis and is genuinely useful negative-result material for the
+paper.
+
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
 unrelated leftover folder from early testing) instead of the real active
@@ -254,3 +316,10 @@ prevents it from being accidentally re-added.
   phrasing variants before trusting the aggregate metric — a narrow regex
   can silently misclassify correct behavior as a failure (happened once
   already with the "enough information" pattern).
+- When combining or ranking results from multiple retrieval sources (or
+  reporting precision/recall over a result list), always deduplicate to
+  unique case names in first-occurrence order BEFORE computing rank
+  positions or applying any rank-based scoring (e.g. RRF). Computing ranks
+  on a raw, duplicate-containing list can silently inflate or deflate a
+  case's effective rank — this caused a real bug in hybrid_search() once
+  already.
