@@ -1,4 +1,5 @@
 import { useState } from "react";
+import DocumentUploadPage from "./DocumentUploadPage.jsx";
 import MappingLookup from "./components/MappingLookup.jsx";
 import QuestionPage from "./components/QuestionPage.jsx";
 import SearchPage from "./components/SearchPage.jsx";
@@ -8,6 +9,7 @@ const TABS = [
   { id: "mapping", label: "IPC–BNS Mapping" },
   { id: "search", label: "Judgment Search" },
   { id: "question", label: "Ask a Question" },
+  { id: "upload", label: "Document Upload" },
 ];
 
 function App() {
@@ -36,6 +38,7 @@ function App() {
         {activeTab === "mapping" && <MappingLookup />}
         {activeTab === "search" && <SearchPage />}
         {activeTab === "question" && <QuestionPage />}
+        {activeTab === "upload" && <DocumentUploadPage />}
       </main>
     </div>
   );

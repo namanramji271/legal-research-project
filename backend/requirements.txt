@@ -10,3 +10,4 @@ datasets
 python-dotenv
 google-genai
 rank_bm25
+python-multipart

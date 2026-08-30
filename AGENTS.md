@@ -281,6 +281,62 @@ rather than unweighted RRF. This directly contradicts the original hybrid-
 search hypothesis and is genuinely useful negative-result material for the
 paper.
 
+## Document Upload — complete
+Goal (from original project plan, Phase 2 item #6): let a user upload a
+legal document and find related judgments from the existing corpus,
+reusing search_judgments() rather than building new retrieval logic.
+Chosen scope: extract text + find related judgments (not summarization —
+that's planned separately as Phase 2 item #7, AI Case Summary, which
+depends on this).
+
+- backend/documents.py: new FastAPI router.
+  - POST /documents/upload — accepts .pdf or .txt file upload
+    (multipart/form-data), extracts text in memory (pdfplumber for PDF,
+    UTF-8 decode for .txt), does NOT persist the file to disk. Returns
+    {filename, extracted_text, char_count, related_judgments}.
+  - find_related_judgments(document_text, sample_size=3,
+    n_results_per_chunk=5): chunks the uploaded document using the same
+    chunker as the corpus build (chunk_text() from
+    scripts/build_embeddings.py), evenly samples `sample_size` chunks
+    spread across the FULL document (not just the first N — e.g. for 40
+    chunks and sample_size=3, samples indices ~0, ~20, ~39), searches
+    each sampled chunk via search_judgments(), and ranks matched cases by
+    how many sampled chunks they matched (match_count), tie-broken by
+    first-appearance order. Returns the same shape as search_judgments()
+    plus a match_count field.
+  - LESSON LEARNED: an initial version truncated to only the FIRST
+    sample_size chunks of the document (e.g. just the first ~2 pages),
+    which would silently ignore the bulk of a long real-world judgment
+    (judgments frequently run 50-100+ pages per the paper's own framing).
+    Fixed to sample evenly across the whole document instead.
+  - requirements.txt: added python-multipart (required for FastAPI file
+    uploads) and pdfplumber (PDF text extraction).
+- Registered in main.py, no /api prefix (consistent with existing routes).
+- frontend/src/DocumentUploadPage.jsx (built in Cursor): file input
+  (.pdf/.txt), upload button with loading state, related judgments shown
+  with the same result-card style as SearchPage.jsx plus a match_count
+  badge, empty-state message ("no closely related judgments found"),
+  collapsible raw extracted_text section, error handling matching the
+  app's existing lookup-message/lookup-error pattern. Added as a new tab
+  in App.jsx alongside Mapping, Search, and Ask a Question. SearchPage.jsx
+  and QuestionPage.jsx were not modified.
+
+CONFIRMED WORKING end-to-end (manually tested):
+- PDF and TXT upload both extract text correctly (verified against a
+  real IEEE-formatted PDF: correct char count, clean text).
+- Self-retrieval sanity check: uploading a corpus judgment's own text
+  correctly returned itself as the #1 related result with
+  match_count=3/3 (all sampled chunks agreed) — strong validation the
+  pipeline works correctly end-to-end.
+- Frontend renders correctly: loading state, result cards, match_count
+  badges, collapsible extracted-text section all confirmed via browser
+  testing.
+NOT YET TESTED: a genuinely long real-world judgment/legal document (50+
+pages) to see whether sample_size=3 remains sufficient at that length, or
+whether it should be increased. Also not yet tested: wrong-file-type
+error path and browser console error-checking (should be confirmed
+before treating this as fully verified).
+
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
 unrelated leftover folder from early testing) instead of the real active
