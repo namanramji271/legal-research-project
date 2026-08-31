@@ -343,6 +343,62 @@ whether it should be increased. Also not yet tested: wrong-file-type
 error path and browser console error-checking (should be confirmed
 before treating this as fully verified).
 
+## Frontend redesign — complete
+Goal: original frontend was functional but visually plain ("basic vibe-coded"
+look) — redesigned for a modern, minimal, professional look suitable for
+project review/demo/conference presentation. Built entirely in Cursor
+(which built the original frontend too, so it has full existing context).
+Purely visual/structural — no API calls, data fetching, or page logic were
+changed during this work.
+
+- Design system: "Minimal Monochrome" — near-black/off-white palette,
+  single restrained accent color, single sans-serif typeface (dropped an
+  earlier navy/gold + serif direction that was tried first and replaced).
+  Slow (300-400ms) ease-in-out animations only; no bounce/scale-pop effects.
+- Navigation: replaced the original top tab bar with a Claude-style left
+  sidebar (expanded by default, collapse/expand toggle, hover-to-preview
+  when collapsed, active-page highlight).
+- New Dashboard page (new default route, replacing direct landing on the
+  Mapping tool): hero section (large headline + supporting text, properly
+  scaled/spaced), four feature cards linking to the existing tools
+  (Mapping, Judgment Search, Ask a Question, Document Upload), plus four
+  additional content sections added in a follow-up pass:
+  - "How It Works" pipeline (Query -> Embedding -> Vector Search -> LLM
+    Generation -> Citation Verification -> Verified Answer), animated
+    step-by-step on scroll.
+  - Evaluation Results stat grid, using REAL project numbers only (no
+    invented stats): 48 curated judgments, 533 indexed chunks, 0
+    fabricated citations across 13 QA evaluation questions (9 in-corpus +
+    4 deliberately out-of-scope), MRR 0.733 (this is the BM25 result
+    specifically — see hybrid_search_findings.md; do not confuse with
+    MiniLM's 0.595 or Hybrid's 0.645 if this section is ever edited
+    again), 18 IPC<->BNS section mappings.
+  - Tech Stack section (FastAPI, React, ChromaDB, Gemini, Sentence
+    Transformers MiniLM/BGE-M3, SQLite) as simple typographic chips.
+  - Context/Motivation section explaining the IPC-to-BNS 2024 transition
+    problem and why keyword search misses conceptually related judgments.
+  - All sections use scroll-triggered fade/slide-up animation (Intersection
+    Observer pattern), staggered, consistent with the feature cards'
+    existing animation.
+- Layout: Dashboard content centered with a ~64rem max-width container
+  (the four tool pages remain at the narrower ~52rem they already used).
+- Design inspiration process: explored a marketing-agency-style reference
+  (Outcrowd) for motion/typography confidence, but deliberately did NOT
+  adopt its structure (parallax hero, fake stats/testimonials, one-time
+  scroll-to-convert layout) since this is a repeatedly-used functional
+  tool, not a one-time marketing page. Borrowed only: typographic
+  confidence in the hero, and a tasteful scroll-triggered reveal for cards
+  instead of load-triggered. Better long-term reference category for
+  future frontend work: functional SaaS/dev tools (Linear, Vercel,
+  Notion, Perplexity for AI-answer/citation display specifically), not
+  marketing/branding agency sites.
+NOT independently re-verified by Claude (no visual access to the running
+app) — verify in-browser that the Evaluation Results section's MRR value
+is correctly labeled as the BM25 result specifically before treating this
+as final, since three different MRR values exist across the eval findings
+docs and mislabeling one on the dashboard would be an easy, avoidable
+inconsistency against the paper.
+
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
 unrelated leftover folder from early testing) instead of the real active
