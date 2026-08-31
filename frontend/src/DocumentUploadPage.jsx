@@ -1,4 +1,5 @@
 import { useState } from "react";
+import LoadingSpinner, { ResultSkeletonList } from "./components/LoadingSpinner.jsx";
 
 const API_BASE = "http://localhost:8000";
 const ALLOWED_EXTENSIONS = [".pdf", ".txt"];
@@ -97,7 +98,7 @@ export default function DocumentUploadPage() {
       </p>
 
       <form className="lookup-form" onSubmit={handleUpload}>
-        <div className="document-controls">
+        <div className="form-card document-controls">
           <label className="lookup-field lookup-field-grow">
             <span className="lookup-label">Document (.pdf or .txt)</span>
             <input
@@ -113,14 +114,28 @@ export default function DocumentUploadPage() {
             type="submit"
             disabled={loading || !file}
           >
-            {loading ? "Uploading…" : "Upload"}
+            {loading ? (
+              <>
+                <span className="button-spinner" aria-hidden="true" />
+                Uploading…
+              </>
+            ) : (
+              "Upload"
+            )}
           </button>
         </div>
       </form>
 
+      {loading && (
+        <>
+          <LoadingSpinner label="Extracting text and finding related judgments…" />
+          <ResultSkeletonList count={3} />
+        </>
+      )}
+
       {error && <p className="lookup-message lookup-error">{error}</p>}
 
-      {result && (
+      {!loading && result && (
         <article className="document-result">
           <p className="document-summary">
             <strong>{result.filename}</strong>
@@ -140,8 +155,12 @@ export default function DocumentUploadPage() {
               <p className="lookup-message">No closely related judgments found.</p>
             ) : (
               <ul className="search-results">
-                {relatedJudgments.map((judgment) => (
-                  <li key={judgment.case_name} className="search-result">
+                {relatedJudgments.map((judgment, index) => (
+                  <li
+                    key={judgment.case_name}
+                    className="search-result search-result-enter"
+                    style={{ animationDelay: `${index * 75}ms` }}
+                  >
                     <div className="search-result-header">
                       <h3>{judgment.case_name}</h3>
                       <span className="match-count-badge">

@@ -1,6 +1,27 @@
 import { useState } from "react";
+import LoadingSpinner, { ResultSkeletonList } from "./LoadingSpinner.jsx";
 
 const API_BASE = "http://localhost:8000";
+
+function VerifiedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function WarningIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path
+        d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 const QA_RESULT_LIMIT = 10;
 
 function uniqueCaseNames(caseNames = []) {
@@ -56,7 +77,7 @@ export default function QuestionPage() {
       </p>
 
       <form className="lookup-form" onSubmit={handleAsk}>
-        <div className="question-controls">
+        <div className="form-card question-controls">
           <label className="lookup-field lookup-field-grow">
             <span className="lookup-label">Legal research question</span>
             <textarea
@@ -69,29 +90,48 @@ export default function QuestionPage() {
           </label>
 
           <button className="lookup-button" type="submit" disabled={loading}>
-            {loading ? "Preparing answer…" : "Ask question"}
+            {loading ? (
+              <>
+                <span className="button-spinner" aria-hidden="true" />
+                Preparing answer…
+              </>
+            ) : (
+              "Ask question"
+            )}
           </button>
         </div>
       </form>
+
+      {loading && (
+        <>
+          <LoadingSpinner label="Retrieving context and generating answer…" />
+          <ResultSkeletonList count={2} />
+        </>
+      )}
 
       {error && <p className="lookup-message lookup-error">{error}</p>}
 
       {result && (
         <article className="question-result">
           <div
-            className={`verification-banner${
+            className={`verification-banner verification-banner-enter${
               result.verified
                 ? " verification-banner-verified"
                 : " verification-banner-unverified"
             }`}
             role="status"
           >
-            <strong>{result.verified ? "Verified" : "Unverified citation warning"}</strong>
-            <span>
-              {result.verified
-                ? "All detected case citations appear in the retrieved context."
-                : "One or more cited cases could not be verified against the retrieved context."}
+            <span className="verification-icon" aria-hidden="true">
+              {result.verified ? <VerifiedIcon /> : <WarningIcon />}
             </span>
+            <div className="verification-content">
+              <strong>{result.verified ? "Verified" : "Unverified citation warning"}</strong>
+              <span>
+                {result.verified
+                  ? "All detected case citations appear in the retrieved context."
+                  : "One or more cited cases could not be verified against the retrieved context."}
+              </span>
+            </div>
           </div>
 
           <section className="question-section">

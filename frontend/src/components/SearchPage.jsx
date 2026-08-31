@@ -1,4 +1,5 @@
 import { useState } from "react";
+import LoadingSpinner, { ResultSkeletonList } from "./LoadingSpinner.jsx";
 
 const API_BASE = "http://localhost:8000";
 const SEARCH_RESULT_LIMIT = 15;
@@ -71,7 +72,7 @@ export default function SearchPage() {
       </p>
 
       <form className="lookup-form" onSubmit={handleSearch}>
-        <div className="lookup-controls">
+        <div className="form-card lookup-controls">
           <label className="lookup-field lookup-field-grow">
             <span className="lookup-label">Query</span>
             <input
@@ -84,10 +85,24 @@ export default function SearchPage() {
           </label>
 
           <button className="lookup-button" type="submit" disabled={loading}>
-            {loading ? "Searching…" : "Search"}
+            {loading ? (
+              <>
+                <span className="button-spinner" aria-hidden="true" />
+                Searching…
+              </>
+            ) : (
+              "Search"
+            )}
           </button>
         </div>
       </form>
+
+      {loading && (
+        <>
+          <LoadingSpinner label="Searching judgment corpus…" />
+          <ResultSkeletonList count={3} />
+        </>
+      )}
 
       {error && <p className="lookup-message lookup-error">{error}</p>}
 
@@ -95,10 +110,14 @@ export default function SearchPage() {
         <p className="lookup-message">No matching judgments found.</p>
       )}
 
-      {results.length > 0 && (
+      {!loading && results.length > 0 && (
         <ul className="search-results">
-          {results.map((result) => (
-            <li key={result.case_name} className="search-result">
+          {results.map((result, index) => (
+            <li
+              key={result.case_name}
+              className="search-result search-result-enter"
+              style={{ animationDelay: `${index * 75}ms` }}
+            >
               <h2>{result.case_name}</h2>
               <p className="search-meta">
                 {result.court}

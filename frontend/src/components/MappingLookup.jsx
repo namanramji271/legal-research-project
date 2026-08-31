@@ -1,4 +1,5 @@
 import { useState } from "react";
+import LoadingSpinner from "./LoadingSpinner.jsx";
 
 const API_BASE = "http://localhost:8000";
 
@@ -50,7 +51,7 @@ export default function MappingLookup() {
       </p>
 
       <form className="lookup-form" onSubmit={handleLookup}>
-        <div className="lookup-controls">
+        <div className="form-card lookup-controls">
           <label className="lookup-field">
             <span className="lookup-label">Direction</span>
             <select
@@ -77,15 +78,27 @@ export default function MappingLookup() {
           </label>
 
           <button className="lookup-button" type="submit" disabled={loading}>
-            {loading ? "Looking up…" : "Look up"}
+            {loading ? (
+              <>
+                <span className="button-spinner" aria-hidden="true" />
+                Looking up…
+              </>
+            ) : (
+              "Look up"
+            )}
           </button>
         </div>
       </form>
 
+      {loading && <LoadingSpinner label="Retrieving section mapping…" />}
+
       {error && <p className="lookup-message lookup-error">{error}</p>}
 
       {result && (
-        <article className="lookup-result">
+        <article
+          key={`${result.ipc_section}-${result.bns_section}`}
+          className="lookup-result lookup-result-enter"
+        >
           <h2>{result.title}</h2>
           <dl className="lookup-details">
             <div>
