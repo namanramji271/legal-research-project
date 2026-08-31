@@ -70,11 +70,16 @@ Answer:"""
 def extract_cited_cases(answer_text: str, known_case_names: list[str]) -> list[str]:
     """Find which known case names are actually mentioned in the answer,
     each returned once, in the order they first appear in the text."""
-    mentions = []
+    mentions: list[tuple[int, str]] = []
+    seen_case_names: set[str] = set()
     for name in known_case_names:
-        if name in answer_text and name not in mentions:
-            mentions.append(name)
-    return mentions
+        if name in seen_case_names:
+            continue
+        seen_case_names.add(name)
+        position = answer_text.find(name)
+        if position >= 0:
+            mentions.append((position, name))
+    return [name for _position, name in sorted(mentions)]
 
 
 def find_unverifiable_citations(answer_text: str, known_case_names: list[str]) -> list[str]:

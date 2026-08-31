@@ -86,6 +86,12 @@ citation-backed QA with a citation verification safeguard.
   KNOWN ISSUE: sources_used can contain duplicate case names (same case
   cited multiple times in one answer) — extract_cited_cases() needs to
   deduplicate while preserving first-occurrence order.
+  RESOLVED: extract_cited_cases() now deduplicates sources_used in
+  first-occurrence order. Verified via an isolated unit test
+  (backend/eval/test_dedup_logic.py) that calls the function directly
+  with a sample answer text containing a repeated citation, rather than
+  relying on Gemini happening to produce a repeated citation in a live
+  response (which would also cost API quota unnecessarily to test).
 - Citation verifier: complete — folded into backend/qa.py via
   find_unverifiable_citations(), which scans the answer text for
   ILDC-case-name-shaped strings (regex pattern "ILDC case \d{4}_\d+") not
