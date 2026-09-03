@@ -2,19 +2,40 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from io import BytesIO
+import json
+import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
-import pdfplumber
+from dotenv import load_dotenv
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from google import genai
+import pdfplumber
+from pydantic import BaseModel
 
 from scripts.build_embeddings import chunk_text
 from search import search_judgments
 
 
+load_dotenv()
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY not found. Add it to backend/.env as "
+        "GEMINI_API_KEY=your_key_here"
+    )
+
+MODEL_NAME = "gemini-2.5-flash"
+
+client = genai.Client(api_key=GEMINI_API_KEY)
 router = APIRouter()
 SUPPORTED_SUFFIXES = {".pdf", ".txt"}
+DATA_DIR = Path(__file__).resolve().parent / "data"
+JUDGMENTS_FILE = DATA_DIR / "judgments.jsonl"
 
 
 def _extract_pdf_text(file_bytes: bytes) -> str:
@@ -99,6 +120,36 @@ def find_related_judgments(
     ]
 
 
+def summarize_legal_text(text: str, max_chars: int = 20000) -> str:
+    """Produce a concise, structured legal summary of the provided text using Gemini."""
+    is_truncated = len(text) > max_chars
+    truncated_text = text[:max_chars] if is_truncated else text
+
+    prompt = f"""You are a legal research assistant. Produce a concise, structured legal summary of the following document using ONLY the provided text (do not use outside knowledge).
+
+The summary must be under 200 words and contain exactly four labeled sections:
+- Facts:
+- Issue/Question of Law:
+- Holding/Decision:
+- Reasoning:
+
+Provided text:
+{truncated_text}
+
+Summary:"""
+
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+    )
+    summary_text = response.text or ""
+
+    if is_truncated:
+        summary_text = f"{summary_text}\n\n[Note: Source text was truncated to {max_chars} characters for length.]"
+
+    return summary_text
+
+
 @router.post("/documents/upload")
 async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
     """Extract PDF or plain-text content without storing the uploaded file."""
@@ -130,3 +181,69 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
         "char_count": len(extracted_text),
         "related_judgments": related_judgments,
     }
+
+
+class SummarizeUploadedRequest(BaseModel):
+    extracted_text: str
+
+
+@router.post("/documents/summarize-uploaded")
+def summarize_uploaded(request: SummarizeUploadedRequest) -> dict[str, str]:
+    if not request.extracted_text.strip():
+        raise HTTPException(
+            status_code=400, detail="extracted_text cannot be empty"
+        )
+    summary = summarize_legal_text(request.extracted_text)
+    return {"summary": summary}
+
+
+@lru_cache(maxsize=1)
+def _load_judgments_index() -> dict[str, dict[str, Any]]:
+    """Load judgments from judgments.jsonl indexed by case_name."""
+    if not JUDGMENTS_FILE.exists():
+        return {}
+    index: dict[str, dict[str, Any]] = {}
+    with JUDGMENTS_FILE.open("r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            case_name = record.get("case_name")
+            if case_name:
+                index[case_name] = record
+    return index
+
+
+def find_judgment_by_case_name(case_name: str) -> dict[str, Any] | None:
+    """Read backend/data/judgments.jsonl and return matching record, or None."""
+    index = _load_judgments_index()
+    if case_name in index:
+        return index[case_name]
+    if JUDGMENTS_FILE.exists():
+        _load_judgments_index.cache_clear()
+        return _load_judgments_index().get(case_name)
+    return None
+
+
+get_judgment_by_case_name = find_judgment_by_case_name
+
+
+@router.get("/judgments/{case_name}/summary")
+def get_judgment_summary(case_name: str) -> dict[str, str]:
+    """Return an AI-generated structured summary for a judgment in the corpus."""
+    decoded_case_name = unquote(case_name).strip()
+    record = find_judgment_by_case_name(decoded_case_name)
+    if record is None and decoded_case_name != case_name:
+        record = find_judgment_by_case_name(case_name)
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No judgment found with case_name: {case_name}",
+        )
+
+    summary = summarize_legal_text(record["full_text"])
+    return {"case_name": case_name, "summary": summary}
+
+

@@ -399,6 +399,71 @@ as final, since three different MRR values exist across the eval findings
 docs and mislabeling one on the dashboard would be an easy, avoidable
 inconsistency against the paper.
 
+## AI Case Summary — complete
+Builds on Document Upload (#6) + Judgment Summarization (#4) from the original
+plan, combined into one feature per design decision: summarize both the
+uploaded document AND individual related judgments, on demand.
+
+- backend/documents.py: added Gemini client setup identical to qa.py's
+  pattern (load_dotenv, GEMINI_API_KEY check/RuntimeError, MODEL_NAME =
+  "gemini-2.5-flash", client = genai.Client(...)) — kept self-contained in
+  documents.py, qa.py untouched.
+- summarize_legal_text(text: str, max_chars: int = 20000) -> str: truncates
+  input over max_chars (appends a truncation note to output when triggered),
+  prompts Gemini for a structured summary under 200 words across four
+  labeled sections (Facts / Issue/Question of Law / Holding/Decision /
+  Reasoning), using only the provided text. Verified: correctly declines to
+  invent Holding/Reasoning when the input doesn't state them (tested on a
+  synthetic thin fact pattern), and correctly extracts real legal reasoning
+  when given a real judgment (tested on ILDC case 1951_30 — Section 439 CrPC
+  scope-of-revision case).
+- POST /documents/summarize-uploaded: body {extracted_text: string}, returns
+  {summary: string}. 400 on empty/whitespace-only extracted_text. Separate
+  from /documents/upload by design — summarization is never automatic.
+- GET /judgments/{case_name}/summary: looks up case_name (URL-decoded via
+  unquote(), handles names with spaces e.g. "ILDC case 2013_35") against a
+  cached in-memory index (_load_judgments_index(), @lru_cache(maxsize=1),
+  keyed by case_name from judgments.jsonl). Returns {case_name, summary} or
+  404 if not found.
+- DESIGN CONSTRAINT (deliberate): summarization is entirely on-demand,
+  never automatic on upload/search/page-load. Same Gemini free-tier limits
+  as before (5 req/min, 20/day) — auto-summarizing every upload or search
+  result would burn quota fast. Every summary requires an explicit user
+  click on its specific button.
+- Frontend (built in Cursor initially, finished in Antigravity after a
+  Cursor rate limit): DocumentUploadPage.jsx only — SearchPage.jsx and
+  QuestionPage.jsx untouched.
+  - "Summarize Document" button near the collapsible extracted-text
+    section; result rendered via a new SummaryBody component that splits
+    on **Label:** markdown-bold tokens into labeled .summary-section
+    blocks, falling back to plain text if the format doesn't parse
+    (defensive against Gemini output drift).
+  - Per-card "Summarize" button on each related-judgment card. State is
+    tracked per-card via a Map<case_name, {loading, error, summary}> —
+    clicking one card's button has zero effect on any other card.
+  - case_name URL-encoded via encodeURIComponent() before the GET request.
+  - 404s shown as an inline error on the specific card.
+  - All summary state clears on new file selection/upload.
+
+CONFIRMED WORKING end-to-end (manually tested, screenshots reviewed):
+- Document summary: real 37,019-char PDF upload, truncation note appeared
+  correctly, all four sections rendered as distinct visual blocks.
+- Per-card judgment summary: tested on ILDC case 1974_115 (Bombay
+  Municipal Corporation Act / Article 14 case) — accurate four-section
+  summary, only that card updated, all other cards (1971_142, 1957_64,
+  2002_580, 1964_288, 1955_0) remained independently clickable and
+  unaffected.
+- No auto-summarization observed anywhere; all summaries required explicit
+  clicks.
+
+KNOWN MINOR ISSUE (not yet fixed): Gemini sometimes prepends an
+unrequested preamble sentence before the Facts section (e.g. "Here is a
+concise, structured legal summary based *only* on the provided text:").
+SummaryBody's fallback rendering handles this gracefully (shown as plain
+text above the labeled sections), so it's cosmetic, not a functional bug.
+Fix if revisited: tighten the prompt in summarize_legal_text() to
+explicitly forbid preamble/introductory sentences.
+
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
 unrelated leftover folder from early testing) instead of the real active
