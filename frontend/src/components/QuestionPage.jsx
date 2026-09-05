@@ -24,6 +24,12 @@ function WarningIcon() {
 }
 const QA_RESULT_LIMIT = 10;
 
+const EXAMPLE_QUESTIONS = [
+  "When does the right of private defence exceed reasonable force?",
+  "What distinguishes murder from culpable homicide not amounting to murder?",
+  "How is common intention proven under Section 34?",
+];
+
 function uniqueCaseNames(caseNames = []) {
   return [...new Set(caseNames.filter(Boolean))];
 }
@@ -34,9 +40,8 @@ export default function QuestionPage() {
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
 
-  async function handleAsk(event) {
-    event.preventDefault();
-    const trimmed = question.trim();
+  async function executeAsk(questionText) {
+    const trimmed = questionText.trim();
     if (!trimmed) {
       setError("Enter a legal research question.");
       setResult(null);
@@ -65,15 +70,29 @@ export default function QuestionPage() {
     }
   }
 
+  function handleAsk(event) {
+    event.preventDefault();
+    executeAsk(question);
+  }
+
+  function handleChipClick(examplePrompt) {
+    setQuestion(examplePrompt);
+    executeAsk(examplePrompt);
+  }
+
   const retrievedSources = uniqueCaseNames(result?.retrieved_sources);
   const unverifiedCitations = result?.unverified_citations || [];
 
   return (
     <section className="lookup-page">
-      <h1>Ask a Question</h1>
+      <h1>Ask a question</h1>
       <p className="lookup-lead">
         Ask about the judgment corpus. Answers are grounded in retrieved cases and
         checked against the cases supplied as context.
+      </p>
+
+      <p className="corpus-scope-note">
+        Corpus scope: Murder &amp; Culpable Homicide (IPC 299–304) · Private Defence (IPC 96–106)
       </p>
 
       <form className="lookup-form" onSubmit={handleAsk}>
@@ -100,6 +119,24 @@ export default function QuestionPage() {
             )}
           </button>
         </div>
+
+        {!loading && !result && (
+          <div className="query-chips-group">
+            <span className="query-chips-label">Suggested questions</span>
+            <div className="query-chips">
+              {EXAMPLE_QUESTIONS.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="query-chip"
+                  onClick={() => handleChipClick(example)}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </form>
 
       {loading && (

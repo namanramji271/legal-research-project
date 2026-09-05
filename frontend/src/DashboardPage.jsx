@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 const FEATURES = [
   {
     id: "mapping",
-    title: "IPC–BNS Mapping",
+    title: "IPC–BNS mapping",
     description: "Look up bidirectional section correspondences under the new Bharatiya Nyaya Sanhita.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -13,7 +13,7 @@ const FEATURES = [
   },
   {
     id: "search",
-    title: "Judgment Search",
+    title: "Judgment search",
     description: "Search the curated corpus of murder, culpable homicide, and private-defence judgments.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -24,7 +24,7 @@ const FEATURES = [
   },
   {
     id: "question",
-    title: "Ask a Question",
+    title: "Ask a question",
     description: "Get citation-backed answers grounded in retrieved judgments, with verification safeguards.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -35,7 +35,7 @@ const FEATURES = [
   },
   {
     id: "upload",
-    title: "Document Upload",
+    title: "Document upload",
     description: "Upload a brief or memo to extract text and surface related precedent from the corpus.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -169,138 +169,152 @@ export default function DashboardPage({ onNavigate }) {
 
   return (
     <section className="dashboard-page">
-      <header className="dashboard-hero">
-        <h1 className="dashboard-headline">Legal Research Platform</h1>
-        <p className="dashboard-intro">
-          An AI-assisted research tool for Indian criminal law covering murder,
-          culpable homicide, and private defence. Navigate bidirectional IPC–BNS
-          section mapping, run semantic search over curated judgments, ask
-          citation-backed questions with verification safeguards, or upload a
-          document to find related precedent.
-        </p>
-      </header>
+      {/* ── Zone 1: Product zone ── */}
+      <div className="dashboard-product-zone">
+        <header className="dashboard-hero">
+          <h1 className="dashboard-headline">Legal Research Platform</h1>
+          <p className="dashboard-intro">
+            An AI-assisted research tool for Indian criminal law covering murder,
+            culpable homicide, and private defence. Navigate bidirectional IPC–BNS
+            section mapping, run semantic search over curated judgments, ask
+            citation-backed questions with verification safeguards, or upload a
+            document to find related precedent.
+          </p>
+        </header>
 
-      <div
-        ref={gridRef}
-        className={`dashboard-grid${cardsVisible ? " dashboard-grid-visible" : ""}`}
-      >
-        {FEATURES.map((feature, index) => (
-          <button
-            key={feature.id}
-            type="button"
-            className="dashboard-card"
-            style={
-              cardsVisible ? { animationDelay: `${index * CARD_STAGGER_MS}ms` } : undefined
-            }
-            onClick={() => onNavigate(feature.id)}
-          >
-            <span className="dashboard-card-icon" aria-hidden="true">
-              {feature.icon}
-            </span>
-            <span className="dashboard-card-body">
-              <span className="dashboard-card-title">{feature.title}</span>
-              <span className="dashboard-card-desc">{feature.description}</span>
-            </span>
-          </button>
-        ))}
+        <div
+          ref={gridRef}
+          className={`dashboard-grid${cardsVisible ? " dashboard-grid-visible" : ""}`}
+        >
+          {FEATURES.map((feature, index) => (
+            <button
+              key={feature.id}
+              type="button"
+              className="dashboard-card"
+              style={
+                cardsVisible ? { animationDelay: `${index * CARD_STAGGER_MS}ms` } : undefined
+              }
+              onClick={() => onNavigate(feature.id)}
+            >
+              <span className="dashboard-card-icon" aria-hidden="true">
+                {feature.icon}
+              </span>
+              <span className="dashboard-card-body">
+                <span className="dashboard-card-title">{feature.title}</span>
+                <span className="dashboard-card-desc">{feature.description}</span>
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
-      <section
-        ref={pipelineRef}
-        className={`dashboard-section dashboard-pipeline${
-          pipelineVisible ? " dashboard-section-visible" : ""
-        }`}
-      >
-        <h2 className="dashboard-section-title">How It Works</h2>
-        <p className="dashboard-section-lead">
-          The question-answering pipeline from user query to a citation-verified response.
-        </p>
-        <ol className="pipeline-flow">
-          {PIPELINE_STEPS.map((step, index) => (
-            <li key={step.label} className="pipeline-flow-item">
-              <article
-                className="pipeline-step"
+      {/* ── Zone 2: Technical & evidence zone ── */}
+      <section className="dashboard-technical-zone" aria-labelledby="technical-reference-title">
+        <header className="dashboard-zone-header">
+          <span className="dashboard-zone-eyebrow">Architecture &amp; evaluation</span>
+          <h2 id="technical-reference-title" className="dashboard-zone-title">Technical reference</h2>
+          <p className="dashboard-zone-lead">
+            Pipeline architecture, empirical evaluation metrics, and implementation details for the underlying retrieval and verification engine.
+          </p>
+        </header>
+
+        <section
+          ref={pipelineRef}
+          className={`dashboard-section dashboard-pipeline${
+            pipelineVisible ? " dashboard-section-visible" : ""
+          }`}
+        >
+          <h3 className="dashboard-section-title">How it works</h3>
+          <p className="dashboard-section-lead">
+            The question-answering pipeline from user query to a citation-verified response.
+          </p>
+          <ol className="pipeline-flow">
+            {PIPELINE_STEPS.map((step, index) => (
+              <li key={step.label} className="pipeline-flow-item">
+                <article
+                  className="pipeline-step"
+                  style={
+                    pipelineVisible
+                      ? { animationDelay: `${index * SECTION_STAGGER_MS}ms` }
+                      : undefined
+                  }
+                >
+                  <span className="pipeline-step-index">{index + 1}</span>
+                  <h4 className="pipeline-step-label">{step.label}</h4>
+                  <p className="pipeline-step-desc">{step.description}</p>
+                </article>
+                {index < PIPELINE_STEPS.length - 1 ? (
+                  <PipelineConnector index={index} visible={pipelineVisible} />
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section
+          ref={statsRef}
+          className={`dashboard-section dashboard-stats${
+            statsVisible ? " dashboard-section-visible" : ""
+          }`}
+        >
+          <h3 className="dashboard-section-title">Evaluation results</h3>
+          <p className="dashboard-section-lead">
+            Measured outcomes from the project&apos;s retrieval and QA evaluation runs.
+          </p>
+          <dl className="stats-grid">
+            {EVAL_STATS.map((stat, index) => (
+              <div
+                key={stat.label}
+                className="stat-item"
                 style={
-                  pipelineVisible
-                    ? { animationDelay: `${index * SECTION_STAGGER_MS}ms` }
-                    : undefined
+                  statsVisible ? { animationDelay: `${index * SECTION_STAGGER_MS}ms` } : undefined
                 }
               >
-                <span className="pipeline-step-index">{index + 1}</span>
-                <h3 className="pipeline-step-label">{step.label}</h3>
-                <p className="pipeline-step-desc">{step.description}</p>
-              </article>
-              {index < PIPELINE_STEPS.length - 1 ? (
-                <PipelineConnector index={index} visible={pipelineVisible} />
-              ) : null}
-            </li>
-          ))}
-        </ol>
-      </section>
+                <dt className="stat-value">{stat.value}</dt>
+                <dd className="stat-label">{stat.label}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
 
-      <section
-        ref={statsRef}
-        className={`dashboard-section dashboard-stats${
-          statsVisible ? " dashboard-section-visible" : ""
-        }`}
-      >
-        <h2 className="dashboard-section-title">Evaluation Results</h2>
-        <p className="dashboard-section-lead">
-          Measured outcomes from the project&apos;s retrieval and QA evaluation runs.
-        </p>
-        <dl className="stats-grid">
-          {EVAL_STATS.map((stat, index) => (
-            <div
-              key={stat.label}
-              className="stat-item"
-              style={
-                statsVisible ? { animationDelay: `${index * SECTION_STAGGER_MS}ms` } : undefined
-              }
-            >
-              <dt className="stat-value">{stat.value}</dt>
-              <dd className="stat-label">{stat.label}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
+        <section
+          ref={stackRef}
+          className={`dashboard-section dashboard-stack${
+            stackVisible ? " dashboard-section-visible" : ""
+          }`}
+        >
+          <h3 className="dashboard-section-title">Tech stack</h3>
+          <ul className="stack-grid">
+            {TECH_STACK.map((item, index) => (
+              <li
+                key={item}
+                className="stack-item"
+                style={
+                  stackVisible ? { animationDelay: `${index * SECTION_STAGGER_MS}ms` } : undefined
+                }
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        </section>
 
-      <section
-        ref={stackRef}
-        className={`dashboard-section dashboard-stack${
-          stackVisible ? " dashboard-section-visible" : ""
-        }`}
-      >
-        <h2 className="dashboard-section-title">Tech Stack</h2>
-        <ul className="stack-grid">
-          {TECH_STACK.map((item, index) => (
-            <li
-              key={item}
-              className="stack-item"
-              style={
-                stackVisible ? { animationDelay: `${index * SECTION_STAGGER_MS}ms` } : undefined
-              }
-            >
-              {item}
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section
-        ref={contextRef}
-        className={`dashboard-section dashboard-context${
-          contextVisible ? " dashboard-section-visible" : ""
-        }`}
-      >
-        <h2 className="dashboard-section-title">Context</h2>
-        <p className="dashboard-context-text">
-          The 2024 transition from the Indian Penal Code (IPC) to the Bharatiya Nyaya
-          Sanhita (BNS) requires legal professionals to work across both frameworks
-          simultaneously. Existing keyword-based legal search tools often fail to
-          retrieve conceptually related judgments when different terminology is used
-          for the same legal concept — a gap this platform addresses through semantic
-          retrieval and bidirectional section mapping.
-        </p>
+        <section
+          ref={contextRef}
+          className={`dashboard-section dashboard-context${
+            contextVisible ? " dashboard-section-visible" : ""
+          }`}
+        >
+          <h3 className="dashboard-section-title">Context</h3>
+          <p className="dashboard-context-text">
+            The 2024 transition from the Indian Penal Code (IPC) to the Bharatiya Nyaya
+            Sanhita (BNS) requires legal professionals to work across both frameworks
+            simultaneously. Existing keyword-based legal search tools often fail to
+            retrieve conceptually related judgments when different terminology is used
+            for the same legal concept — a gap this platform addresses through semantic
+            retrieval and bidirectional section mapping.
+          </p>
+        </section>
       </section>
     </section>
   );

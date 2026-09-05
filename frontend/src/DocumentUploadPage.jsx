@@ -216,7 +216,7 @@ export default function DocumentUploadPage() {
 
   return (
     <section className="lookup-page">
-      <h1>Document Upload</h1>
+      <h1>Document upload</h1>
       <p className="lookup-lead">
         Upload a legal document to extract its text and find related judgments
         from the corpus.
@@ -290,7 +290,7 @@ export default function DocumentUploadPage() {
                     Summarizing…
                   </>
                 ) : (
-                  "Summarize Document"
+                  "Summarize document"
                 )}
               </button>
             </div>

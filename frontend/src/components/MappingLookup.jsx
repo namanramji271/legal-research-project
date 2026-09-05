@@ -3,6 +3,8 @@ import LoadingSpinner from "./LoadingSpinner.jsx";
 
 const API_BASE = "http://localhost:8000";
 
+const EXAMPLE_SECTIONS = ["302", "304", "96"];
+
 export default function MappingLookup() {
   const [direction, setDirection] = useState("ipc");
   const [section, setSection] = useState("");
@@ -10,9 +12,8 @@ export default function MappingLookup() {
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
 
-  async function handleLookup(event) {
-    event.preventDefault();
-    const trimmed = section.trim();
+  async function executeLookup(lookupSection, lookupDirection = direction) {
+    const trimmed = lookupSection.trim();
     if (!trimmed) {
       setError("Enter a section number.");
       setResult(null);
@@ -24,7 +25,7 @@ export default function MappingLookup() {
     setResult(null);
 
     const path =
-      direction === "ipc"
+      lookupDirection === "ipc"
         ? `/mapping/ipc/${encodeURIComponent(trimmed)}`
         : `/mapping/bns/${encodeURIComponent(trimmed)}`;
 
@@ -42,12 +43,27 @@ export default function MappingLookup() {
     }
   }
 
+  function handleLookup(event) {
+    event.preventDefault();
+    executeLookup(section, direction);
+  }
+
+  function handleChipClick(exampleSection) {
+    setDirection("ipc");
+    setSection(exampleSection);
+    executeLookup(exampleSection, "ipc");
+  }
+
   return (
     <section className="lookup-page">
-      <h1>IPC–BNS Mapping</h1>
+      <h1>IPC–BNS mapping</h1>
       <p className="lookup-lead">
         Look up the corresponding section under the Bharatiya Nyaya Sanhita (BNS)
         or Indian Penal Code (IPC).
+      </p>
+
+      <p className="corpus-scope-note">
+        Corpus scope: Murder &amp; Culpable Homicide (IPC 299–304) · Private Defence (IPC 96–106)
       </p>
 
       <form className="lookup-form" onSubmit={handleLookup}>
@@ -88,6 +104,24 @@ export default function MappingLookup() {
             )}
           </button>
         </div>
+
+        {!loading && !result && (
+          <div className="query-chips-group">
+            <span className="query-chips-label">Example sections</span>
+            <div className="query-chips">
+              {EXAMPLE_SECTIONS.map((sec) => (
+                <button
+                  key={sec}
+                  type="button"
+                  className="query-chip"
+                  onClick={() => handleChipClick(sec)}
+                >
+                  Section {sec}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </form>
 
       {loading && <LoadingSpinner label="Retrieving section mapping…" />}

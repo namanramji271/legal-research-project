@@ -12,7 +12,7 @@ const NAV_ITEMS = [
   },
   {
     id: "mapping",
-    label: "IPC–BNS Mapping",
+    label: "IPC–BNS mapping",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" strokeLinecap="round" />
@@ -21,7 +21,7 @@ const NAV_ITEMS = [
   },
   {
     id: "search",
-    label: "Judgment Search",
+    label: "Judgment search",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <circle cx="11" cy="11" r="6" />
@@ -31,7 +31,7 @@ const NAV_ITEMS = [
   },
   {
     id: "question",
-    label: "Ask a Question",
+    label: "Ask a question",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M12 18h.01M8.5 8.5a3.5 3.5 0 117 0c0 2-2 2.5-2 3.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -41,7 +41,7 @@ const NAV_ITEMS = [
   },
   {
     id: "upload",
-    label: "Document Upload",
+    label: "Document upload",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M12 15V5m0 0l-3.5 3.5M12 5l3.5 3.5M5 19h14" strokeLinecap="round" strokeLinejoin="round" />

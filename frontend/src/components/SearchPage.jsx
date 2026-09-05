@@ -4,6 +4,12 @@ import LoadingSpinner, { ResultSkeletonList } from "./LoadingSpinner.jsx";
 const API_BASE = "http://localhost:8000";
 const SEARCH_RESULT_LIMIT = 15;
 
+const EXAMPLE_QUERIES = [
+  "Sudden provocation reducing murder to culpable homicide",
+  "Right of private defence exceeding reasonable force",
+  "Common intention under Section 34",
+];
+
 function deduplicateByCaseName(results) {
   const seen = new Set();
   const deduped = [];
@@ -27,9 +33,8 @@ export default function SearchPage() {
   const [results, setResults] = useState([]);
   const [hasSearched, setHasSearched] = useState(false);
 
-  async function handleSearch(event) {
-    event.preventDefault();
-    const trimmed = query.trim();
+  async function executeSearch(searchQuery) {
+    const trimmed = searchQuery.trim();
     if (!trimmed) {
       setError("Enter a search query.");
       setResults([]);
@@ -63,12 +68,26 @@ export default function SearchPage() {
     }
   }
 
+  function handleSearch(event) {
+    event.preventDefault();
+    executeSearch(query);
+  }
+
+  function handleChipClick(exampleQuery) {
+    setQuery(exampleQuery);
+    executeSearch(exampleQuery);
+  }
+
   return (
     <section className="lookup-page">
-      <h1>Judgment Search</h1>
+      <h1>Judgment search</h1>
       <p className="lookup-lead">
         Search murder, culpable homicide, and private-defence judgments by
         natural language.
+      </p>
+
+      <p className="corpus-scope-note">
+        Corpus scope: Murder &amp; Culpable Homicide (IPC 299–304) · Private Defence (IPC 96–106)
       </p>
 
       <form className="lookup-form" onSubmit={handleSearch}>
@@ -95,6 +114,24 @@ export default function SearchPage() {
             )}
           </button>
         </div>
+
+        {!loading && results.length === 0 && (
+          <div className="query-chips-group">
+            <span className="query-chips-label">Suggested queries</span>
+            <div className="query-chips">
+              {EXAMPLE_QUERIES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="query-chip"
+                  onClick={() => handleChipClick(example)}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </form>
 
       {loading && (
