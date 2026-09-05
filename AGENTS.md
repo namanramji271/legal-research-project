@@ -464,6 +464,78 @@ text above the labeled sections), so it's cosmetic, not a functional bug.
 Fix if revisited: tighten the prompt in summarize_legal_text() to
 explicitly forbid preamble/introductory sentences.
 
+## Dashboard restructure — complete
+Context: Phase 1 academic review is complete; going forward the
+Dashboard's primary audience is resume/portfolio viewers and future
+conference reviewers, not an evaluator checking the live site against a
+rubric. Goal: make the Dashboard read as a confident, usable product
+first, with technical/evaluation depth repositioned as secondary
+supporting evidence rather than primary content.
+
+- frontend/src/DashboardPage.jsx restructured into two visually distinct
+  zones on the same page (no route split — no router exists in this app,
+  page state is a single useState in App.jsx):
+  - Zone 1 (product, unchanged): hero + 4 feature cards, primary
+    above-the-fold content.
+  - Zone 2 (technical/evidence, demoted not deleted): How It Works
+    pipeline, Evaluation Results stat grid, Tech Stack, Context
+    paragraph — now wrapped in a distinct container with a lighter
+    background shade shift and a "ARCHITECTURE & EVALUATION / Technical
+    reference" section intro, marking a deliberate transition rather
+    than a plain divider.
+  - Not made collapsible/accordion — still visible on scroll, just
+    repositioned as secondary.
+  - Evaluation Results stat grid also rebalanced during this pass (was
+    4-then-1-orphaned across rows; now displays as a clean 3+2 layout at
+    all breakpoints).
+  - All existing scroll-triggered reveal animations (useInView,
+    dashboardCardReveal stagger, connector line animations) preserved
+    exactly as they worked before.
+- Confirmed working via screenshots: clean product-first landing, clear
+  visual break before the technical section, stat grid no longer
+  orphaned.
+
+## Frontend polish pass — complete
+Goal: fix large empty dead-zones below the input on every tool page
+(Mapping, Search, Ask a Question), add scope calibration, and audit
+button-label consistency.
+
+- Suggested/example chips added below the input on:
+  - frontend/src/components/SearchPage.jsx — 3 example queries (sudden
+    provocation, private defence/reasonable force, common intention
+    Section 34).
+  - frontend/src/components/QuestionPage.jsx — 3 example questions,
+    same topics.
+  - frontend/src/components/MappingLookup.jsx — 3 example sections
+    (302, 304, 96).
+  - Clicking a chip auto-populates the input AND auto-submits (no
+    second click needed) — confirmed working via screenshot (Section
+    302 chip → correct Punishment for murder / IPC 302 → BNS 103(1)
+    result returned automatically).
+  - Chips only shown before a result exists.
+- Corpus scope reminder added below the page description on all three
+  tool pages above: "Corpus scope: Murder & Culpable Homicide (IPC
+  299–304) · Private Defence (IPC 96–106)" — small, muted styling,
+  doesn't compete with the heading.
+- Button label casing audited across SearchPage.jsx, QuestionPage.jsx,
+  MappingLookup.jsx, DocumentUploadPage.jsx, and Sidebar.jsx —
+  standardized to sentence case throughout.
+- Confirmed working via screenshots on all three tool pages plus one
+  live chip-click test.
+
+## Future work (not yet built, documented for later)
+Persona-aware legal research platform: role-differentiated depth/framing
+of the same RAG engine for lawyers (dense, citation-heavy), judges
+(citation-verification emphasized), law students (explanatory
+scaffolding), and general public (plain-language, no raw citations,
+"not legal advice" disclaimer). Staged approach agreed: Stage 1 =
+frontend-only persona selector (React state, no backend) changing
+prompt verbosity/chip examples/citation visibility; Stage 2 = lightweight
+accounts for personalization only (saved history/bookmarks); Stage 3 =
+true role-based access control, comparable in scope to the whole project
+so far — treat as a "v2 of the platform." Deferred for now; document as
+future-work in the paper.
+
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
 unrelated leftover folder from early testing) instead of the real active
