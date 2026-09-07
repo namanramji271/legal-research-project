@@ -10,20 +10,91 @@ const EXAMPLE_QUERIES = [
   "Common intention under Section 34",
 ];
 
+const RELEVANCE_STRENGTH = {
+  "Strong match": 3,
+  "Moderate match": 2,
+  "Weak match": 1,
+};
+
 function deduplicateByCaseName(results) {
-  const seen = new Set();
+  const seen = new Map();
   const deduped = [];
 
   for (const result of results) {
     const key = result.case_name;
-    if (!key || seen.has(key)) {
-      continue;
+    if (!key) continue;
+
+    if (!seen.has(key)) {
+      seen.set(key, deduped.length);
+      deduped.push({ ...result });
+    } else {
+      const idx = seen.get(key);
+      const existingStrength =
+        RELEVANCE_STRENGTH[deduped[idx].relevance_label] ?? 0;
+      const incomingStrength =
+        RELEVANCE_STRENGTH[result.relevance_label] ?? 0;
+      if (incomingStrength > existingStrength) {
+        deduped[idx] = { ...result };
+      }
     }
-    seen.add(key);
-    deduped.push(result);
   }
 
   return deduped;
+}
+
+function getMethodBadgeText(methods) {
+  if (!Array.isArray(methods) || methods.length === 0) {
+    return null;
+  }
+  const hasDense = methods.includes("dense");
+  const hasBm25 = methods.includes("bm25");
+  if (hasDense && hasBm25) {
+    return "Matched by keyword + semantic search";
+  }
+  if (hasBm25) {
+    return "Matched by keyword search";
+  }
+  if (hasDense) {
+    return "Matched by semantic search";
+  }
+  return null;
+}
+
+function HighlightedSnippet({ text, terms }) {
+  if (!text) return null;
+  if (!terms || !Array.isArray(terms) || terms.length === 0) {
+    return <p className="search-snippet">{text}</p>;
+  }
+
+  const validTerms = terms.filter(Boolean);
+  if (validTerms.length === 0) {
+    return <p className="search-snippet">{text}</p>;
+  }
+
+  const escaped = [...validTerms]
+    .sort((a, b) => b.length - a.length)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+
+  return (
+    <p className="search-snippet">
+      {parts.map((part, index) => {
+        if (!part) return null;
+        const isMatch = validTerms.some(
+          (t) => t.toLowerCase() === part.toLowerCase()
+        );
+        return isMatch ? (
+          <mark key={index} className="term-highlight">
+            {part}
+          </mark>
+        ) : (
+          part
+        );
+      })}
+    </p>
+  );
 }
 
 export default function SearchPage() {
@@ -149,25 +220,50 @@ export default function SearchPage() {
 
       {!loading && results.length > 0 && (
         <ul className="search-results">
-          {results.map((result, index) => (
-            <li
-              key={result.case_name}
-              className="search-result search-result-enter"
-              style={{ animationDelay: `${index * 75}ms` }}
-            >
-              <h2>{result.case_name}</h2>
-              <p className="search-meta">
-                {result.court}
-                {result.year ? ` · ${result.year}` : ""}
-              </p>
-              {result.ipc_sections?.length > 0 && (
-                <p className="search-sections">
-                  IPC: {result.ipc_sections.join(", ")}
+          {results.map((result, index) => {
+            const methodBadge = getMethodBadgeText(result.matched_methods);
+            const relevanceClass =
+              result.relevance_label === "Strong match"
+                ? "relevance-badge-strong"
+                : result.relevance_label === "Moderate match"
+                ? "relevance-badge-moderate"
+                : "relevance-badge-weak";
+
+            return (
+              <li
+                key={result.case_name}
+                className="search-result search-result-enter"
+                style={{ animationDelay: `${index * 75}ms` }}
+              >
+                <div className="search-result-header">
+                  <h2>{result.case_name}</h2>
+                  <div className="match-badges">
+                    {result.relevance_label && (
+                      <span className={`relevance-badge ${relevanceClass}`}>
+                        {result.relevance_label}
+                      </span>
+                    )}
+                    {methodBadge && (
+                      <span className="method-badge">{methodBadge}</span>
+                    )}
+                  </div>
+                </div>
+                <p className="search-meta">
+                  {result.court}
+                  {result.year ? ` · ${result.year}` : ""}
                 </p>
-              )}
-              <p className="search-snippet">{result.snippet}</p>
-            </li>
-          ))}
+                {result.ipc_sections?.length > 0 && (
+                  <p className="search-sections">
+                    IPC: {result.ipc_sections.join(", ")}
+                  </p>
+                )}
+                <HighlightedSnippet
+                  text={result.snippet}
+                  terms={result.matched_terms}
+                />
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

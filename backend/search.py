@@ -17,6 +17,7 @@ from embeddings import (
     get_bge_embedding_function,
     get_embedding_function,
 )
+from explainability import compute_match_explanation
 
 SEARCH_DISTANCE_THRESHOLD = 0.65
 
@@ -138,4 +139,35 @@ def search(
     n_results: int = Query(5, ge=1, description="Number of matching chunks to return"),
 ) -> list[dict[str, Any]]:
     """Expose semantic judgment retrieval as a frontend-ready JSON response."""
-    return search_judgments(q, n_results)
+    results = search_judgments(q, n_results)
+    if not results:
+        return results
+
+    try:
+        bm25_results = bm25_search(q, n_results=15)
+        bm25_case_names = list(
+            dict.fromkeys(
+                r.get("case_name", "") for r in bm25_results if r.get("case_name")
+            )
+        )
+        dense_case_names = list(
+            dict.fromkeys(
+                r.get("case_name", "") for r in results if r.get("case_name")
+            )
+        )
+        for result in results:
+            explanation = compute_match_explanation(
+                query=q,
+                case_name=result.get("case_name", ""),
+                snippet=result.get("snippet", ""),
+                dense_case_names=dense_case_names,
+                bm25_case_names=bm25_case_names,
+            )
+            result.update(explanation)
+    except Exception:
+        for result in results:
+            result.setdefault("matched_methods", ["dense"])
+            result.setdefault("matched_terms", [])
+            result.setdefault("relevance_label", "Moderate match")
+
+    return results

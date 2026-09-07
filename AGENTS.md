@@ -523,6 +523,84 @@ button-label consistency.
 - Confirmed working via screenshots on all three tool pages plus one
   live chip-click test.
 
+## Explainable Retrieval — complete
+Goal (from original Phase 1 plan, item #8, "planned for Month 3"): make
+retrieval results interpretable rather than a black-box ranking — show
+why a result surfaced, not just that it did. Scoped as a three-layer
+feature building directly on the project's own evaluation findings
+(BM25 alone outperforming both dense and hybrid RRF — see
+backend/eval/hybrid_search_findings.md) rather than inventing a new,
+unrelated scoring heuristic.
+
+- backend/explainability.py: new standalone module,
+  compute_match_explanation(query, case_name, snippet, dense_case_names,
+  bm25_case_names) -> dict. Does not call ChromaDB/BM25 itself — takes
+  already-retrieved case-name lists as input. Returns:
+  - matched_methods: ["dense"] and/or ["bm25"] depending on which
+    retrieval method(s) surfaced this case.
+  - matched_terms: non-stopword query terms found (case-insensitive
+    substring match) in the snippet, order-preserved, deduplicated,
+    capped at 8. Hardcoded stopword list, no new NLP dependency.
+  - relevance_label: "Strong match" if both dense and BM25 agree on this
+    case (method-agreement-as-confidence is the project's own empirical
+    finding, not an invented heuristic), "Moderate match" if only one
+    method surfaced it, "Weak match" if neither (shouldn't occur in
+    normal use, handled gracefully rather than erroring).
+  Verified via a standalone test script (no server/API calls) across 4
+  scenarios: both-methods-agree, dense-only, bm25-only, and a no-match
+  edge case — all returned correct labels/methods with clean term
+  extraction.
+- backend/search.py: GET /search route handler (not search_judgments()
+  itself, which is untouched) now additionally calls bm25_search()
+  (n_results=15) per query, then compute_match_explanation() per result,
+  merging matched_methods/matched_terms/relevance_label into each result
+  object alongside the existing 5 fields. Backward-compatible additive
+  change — existing consumers of the original 5-field shape are
+  unaffected. Wrapped in try/except so that if BM25 or explanation
+  computation fails, core search results still return with fallback
+  values (matched_methods: ["dense"], matched_terms: [], relevance_label:
+  "Moderate match") rather than the endpoint erroring out.
+  Verified via TestClient (all 8 keys present, correct types) AND a real
+  running-server request (both agree) — top result on a well-tested
+  private-defence query correctly returned "Strong match"/both methods.
+- frontend/src/components/SearchPage.jsx: term highlighting
+  (HighlightedSnippet — wraps matched_terms in a subtle, monochrome-
+  consistent <mark>, not a jarring yellow), method-attribution badge
+  (methodLabel — "Matched by keyword + semantic search" / "...semantic
+  search" / "...keyword search", omitted if empty), relevance badge
+  (Strong match visually more prominent via accent-bordered style,
+  Moderate more muted, both distinct from the existing IPC-section tags).
+  deduplicateByCaseName updated to reconcile duplicate case_name entries
+  (same case can appear once per matching chunk) by keeping whichever
+  duplicate has the stronger relevance_label, rather than silently
+  dropping the new explainability fields during dedup.
+  NOTE: relevance_label reflects cross-method retrieval agreement, not
+  literal term overlap — a result can correctly show "Strong match" with
+  no highlighted terms if the specific chunk shown doesn't happen to
+  repeat the query's exact wording. This is intentional, not a bug (see
+  QuestionPage.jsx/SearchPage.jsx design: matched_terms and
+  relevance_label are computed independently).
+
+CONFIRMED WORKING end-to-end (manually tested, screenshots reviewed):
+- "Sudden provocation reducing murder to culpable homicide": top result
+  Strong match/both methods with correctly highlighted terms; two
+  Moderate match/dense-only results below, giving a real, visible
+  illustration of the project's own BM25-vs-dense findings.
+- "Common intention under Section 34": mostly Strong match/both methods
+  results, one Moderate match/semantic-only result at the tail —
+  confirms method-attribution varies correctly across different result
+  positions, not hardcoded.
+- No duplicate case_name cards observed across either test.
+- Gibberish/off-topic query: existing empty-results message still
+  displays correctly, no crash from the new explainability code path.
+- No backend calls beyond the existing free /search endpoint were needed
+  for any of this testing — no Gemini quota impact anywhere in this
+  feature.
+
+Scoped to SearchPage.jsx only, per design — QuestionPage.jsx uses a
+different data shape (QA answer + sources, not a ranked result list) and
+was intentionally left out of this feature's scope.
+
 ## Future work (not yet built, documented for later)
 Persona-aware legal research platform: role-differentiated depth/framing
 of the same RAG engine for lawyers (dense, citation-heavy), judges

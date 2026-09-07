@@ -1172,6 +1172,61 @@
   text-transform: uppercase;
 }
 
+.match-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.relevance-badge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.relevance-badge-strong {
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent);
+}
+
+.relevance-badge-moderate {
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+
+.relevance-badge-weak {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+
+.method-badge {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.term-highlight {
+  background: var(--accent-subtle);
+  color: var(--text-h);
+  padding: 0.05em 0.2em;
+  border-radius: 2px;
+  font-weight: 500;
+}
+
 @keyframes softFadeIn {
   from {
     opacity: 0;
