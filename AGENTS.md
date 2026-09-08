@@ -601,18 +601,85 @@ Scoped to SearchPage.jsx only, per design — QuestionPage.jsx uses a
 different data shape (QA answer + sources, not a ranked result list) and
 was intentionally left out of this feature's scope.
 
+## Authentication & Role-Based Access — Stage 2 in progress
+Context: see "Future work" section below for the full staged plan. Stage 1
+(frontend-only persona toggle) was skipped; went straight to Stage 2 based
+on a clearer articulation of the actual goal — role-gated features per
+persona, not just prompt/UI framing. Role is self-declared at signup, NOT
+identity-verified — this is role-based PERSONALIZATION enforced at the API
+layer, not a security boundary against someone falsely claiming a
+professional identity. State this explicitly in the paper if this feature
+is described there.
+
+- backend/auth.py: new standalone module. users table (id, username,
+  password_hash, role, created_at) in a dedicated SQLite file
+  (backend/data/users.db), kept fully separate from mapping.db (which is a
+  generated artifact rebuilt from ipc_bns_mapping.csv on startup). Only
+  CREATE TABLE IF NOT EXISTS is used — users.db must never be
+  regenerated/dropped, unlike mapping.db.
+  - Password hashing: bcrypt directly (NOT passlib — passlib's bcrypt
+    backend-detection is broken on newer bcrypt/Python versions, causing a
+    "password cannot be longer than 72 bytes" error during passlib's own
+    internal self-test, unrelated to actual password length. Fixed by
+    calling bcrypt.hashpw()/bcrypt.checkpw() directly instead).
+  - JWT via python-jose, HS256, 24h expiry, secret from JWT_SECRET_KEY in
+    .env (same pattern as GEMINI_API_KEY). No refresh-token flow, no email
+    verification, no password reset — deliberately out of scope.
+  - POST /auth/signup and POST /auth/login, both return
+    {access_token, token_type, username, role}.
+  - require_role(*roles) dependency factory for gating other routers.
+  - Roles: lawyer, judge, student, public.
+  - Verified via test script: all 4 roles signup (201), login returns
+    correct role (200), wrong password (401), duplicate username (400).
+- Role-gated backend routes (require_role("lawyer", "judge")): GET /search
+  (search.py), POST /documents/upload, POST /documents/summarize-uploaded,
+  GET /judgments/{case_name}/summary (all in documents.py). POST /ask and
+  all /mapping/* routes remain open to all roles.
+  Verified via test script: judge -> 200, student -> 403, no token -> 401.
+- Frontend: frontend/src/api.js exports authFetch() (wraps fetch(), attaches
+  Authorization: Bearer <token> from localStorage key "auth" if present).
+  New LoginPage.jsx and SignupPage.jsx (role dropdown: Lawyer/Judge/
+  Student/Public). App.jsx blocks all tool pages until auth exists in
+  localStorage; renders LoginPage/SignupPage otherwise. Sidebar.jsx hides
+  Search/Document Upload nav links for student/public roles and shows
+  username/role/logout in a footer.
+  - Route-level enforcement (not just nav-link hiding): App.jsx also
+    blocks direct navigation to search/upload pages for student/public
+    roles, and Dashboard's feature cards for those two tools are
+    hidden/disabled for student/public — closes a bypass where the nav
+    link was hidden but the page was still reachable via dashboard cards.
+  - Collapsed sidebar shows icon-only avatar/logout, matching the existing
+    collapsed nav-link treatment.
+  - SearchPage.jsx and the three gated DocumentUploadPage.jsx calls use
+    authFetch() instead of fetch(); QuestionPage.jsx and MappingLookup.jsx
+    are untouched (their routes aren't gated).
+  Verified end-to-end in-browser across all 4 roles: signup, login/logout,
+  nav gating, dashboard-card gating, and direct search access all correct.
+
+NOT YET BUILT (next): the four persona-specific features this gating
+exists to support — judge side-by-side case comparison, lawyer case-file
+export (star judgments -> PDF/DOCX), student conversational/tutor QA mode,
+public simplified QA (no raw citations). See project_status_checklist.md
+for the up-to-date tracker.
+
 ## Future work (not yet built, documented for later)
-Persona-aware legal research platform: role-differentiated depth/framing
-of the same RAG engine for lawyers (dense, citation-heavy), judges
-(citation-verification emphasized), law students (explanatory
-scaffolding), and general public (plain-language, no raw citations,
-"not legal advice" disclaimer). Staged approach agreed: Stage 1 =
-frontend-only persona selector (React state, no backend) changing
-prompt verbosity/chip examples/citation visibility; Stage 2 = lightweight
-accounts for personalization only (saved history/bookmarks); Stage 3 =
-true role-based access control, comparable in scope to the whole project
-so far — treat as a "v2 of the platform." Deferred for now; document as
-future-work in the paper.
+Persona-aware legal research platform, staged plan (updated — see
+"Authentication & Role-Based Access" section above for what's actually
+built): Stage 1 (frontend-only persona toggle, no accounts) was skipped.
+Stage 2 (accounts + role-gated features, self-declared role) is in
+progress — auth and route gating are done; the four persona-specific
+features (judge comparison view, lawyer case-file export, student tutor
+mode, public simplified QA) are not yet built. Stage 3 (true
+identity-verified RBAC) remains deliberately out of scope — no credential
+verification pipeline (e.g. against Bar Council enrollment or judicial ID
+systems) is planned; role stays self-declared/personalization-only
+forever. Document Stage 3's absence explicitly as a scoping decision in
+the paper, not an oversight.
+
+Other deferred ideas (not yet scoped into a stage): voice assistant
+(speech-to-text/text-to-speech, likely browser-native APIs to avoid
+Gemini quota cost), image upload with OCR (current Document Upload only
+handles PDF/TXT).
 
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
@@ -656,3 +723,10 @@ prevents it from being accidentally re-added.
   on a raw, duplicate-containing list can silently inflate or deflate a
   case's effective rank — this caused a real bug in hybrid_search() once
   already.
+- Auth: role is self-declared at signup, never treated as identity-verified
+  anywhere in the codebase or docs. Any new route that should be
+  restricted uses require_role(*roles) from auth.py as a Depends() — don't
+  invent a second gating pattern.
+- users.db (backend/data/users.db) follows the same rule as chroma_db/ and
+  judgments.jsonl: gitignored, never committed, never assumed to exist on
+  a fresh clone.

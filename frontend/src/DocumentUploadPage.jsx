@@ -1,5 +1,6 @@
 import { useState } from "react";
 import LoadingSpinner, { ResultSkeletonList } from "./components/LoadingSpinner.jsx";
+import { authFetch } from "./api";
 
 const API_BASE = "http://localhost:8000";
 const ALLOWED_EXTENSIONS = [".pdf", ".txt"];
@@ -133,7 +134,7 @@ export default function DocumentUploadPage() {
     formData.append("file", file);
 
     try {
-      const response = await fetch(`${API_BASE}/documents/upload`, {
+      const response = await authFetch(`${API_BASE}/documents/upload`, {
         method: "POST",
         body: formData,
       });
@@ -158,7 +159,7 @@ export default function DocumentUploadPage() {
     setDocSummary(null);
 
     try {
-      const response = await fetch(`${API_BASE}/documents/summarize-uploaded`, {
+      const response = await authFetch(`${API_BASE}/documents/summarize-uploaded`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ extracted_text: result.extracted_text }),
@@ -192,7 +193,7 @@ export default function DocumentUploadPage() {
 
     try {
       const encoded = encodeURIComponent(caseName);
-      const response = await fetch(
+      const response = await authFetch(
         `${API_BASE}/judgments/${encoded}/summary`,
       );
       if (!response.ok) {

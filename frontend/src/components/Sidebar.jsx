@@ -50,11 +50,19 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function Sidebar({ activePage, onNavigate }) {
+export default function Sidebar({ activePage, onNavigate, auth, onLogout }) {
   const [isPinnedOpen, setIsPinnedOpen] = useState(true);
   const [isHovering, setIsHovering] = useState(false);
 
   const isExpanded = isPinnedOpen || isHovering;
+
+  const isLawyerOrJudge = auth?.role === "lawyer" || auth?.role === "judge";
+  const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (item.id === "search" || item.id === "upload") {
+      return isLawyerOrJudge;
+    }
+    return true;
+  });
 
   function handleToggle() {
     setIsPinnedOpen((pinned) => !pinned);
@@ -107,7 +115,7 @@ export default function Sidebar({ activePage, onNavigate }) {
         </div>
 
         <nav className="sidebar-nav" aria-label="Main">
-          {NAV_ITEMS.map((item) => (
+          {visibleNavItems.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -125,6 +133,45 @@ export default function Sidebar({ activePage, onNavigate }) {
             </button>
           ))}
         </nav>
+
+        <div className="sidebar-footer">
+          <div
+            className={`sidebar-user${!isExpanded ? " sidebar-user-collapsed" : ""}`}
+            title={!isExpanded && auth ? `${auth.username} (${auth.role})` : undefined}
+          >
+            <div className="sidebar-user-avatar" aria-hidden="true">
+              {auth?.username ? auth.username.charAt(0).toUpperCase() : "U"}
+            </div>
+            {isExpanded && (
+              <div className="sidebar-user-info">
+                <span className="sidebar-username">{auth?.username || "User"}</span>
+                <span className="sidebar-user-role">{auth?.role || ""}</span>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className={`sidebar-logout-button${!isExpanded ? " sidebar-logout-button-collapsed" : ""}`}
+            onClick={onLogout}
+            title={!isExpanded ? "Log out" : undefined}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              className="sidebar-logout-icon"
+              aria-hidden="true"
+            >
+              <path
+                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l3 3m0 0l-3 3m3-3H9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            {isExpanded && <span className="sidebar-label">Log out</span>}
+          </button>
+        </div>
       </div>
     </aside>
   );

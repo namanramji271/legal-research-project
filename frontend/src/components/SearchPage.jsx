@@ -1,5 +1,6 @@
 import { useState } from "react";
 import LoadingSpinner, { ResultSkeletonList } from "./LoadingSpinner.jsx";
+import { authFetch } from "../api";
 
 const API_BASE = "http://localhost:8000";
 const SEARCH_RESULT_LIMIT = 15;
@@ -123,7 +124,7 @@ export default function SearchPage() {
     });
 
     try {
-      const response = await fetch(`${API_BASE}/search?${params}`);
+      const response = await authFetch(`${API_BASE}/search?${params}`);
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(body?.detail || `Search failed (${response.status})`);

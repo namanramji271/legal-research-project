@@ -160,12 +160,14 @@ function PipelineConnector({ index, visible }) {
   );
 }
 
-export default function DashboardPage({ onNavigate }) {
+export default function DashboardPage({ onNavigate, auth }) {
   const { ref: gridRef, visible: cardsVisible } = useInView();
   const { ref: pipelineRef, visible: pipelineVisible } = useInView();
   const { ref: statsRef, visible: statsVisible } = useInView();
   const { ref: stackRef, visible: stackVisible } = useInView();
   const { ref: contextRef, visible: contextVisible } = useInView();
+
+  const isLawyerOrJudge = auth?.role === "lawyer" || auth?.role === "judge";
 
   return (
     <section className="dashboard-page">
@@ -186,25 +188,41 @@ export default function DashboardPage({ onNavigate }) {
           ref={gridRef}
           className={`dashboard-grid${cardsVisible ? " dashboard-grid-visible" : ""}`}
         >
-          {FEATURES.map((feature, index) => (
-            <button
-              key={feature.id}
-              type="button"
-              className="dashboard-card"
-              style={
-                cardsVisible ? { animationDelay: `${index * CARD_STAGGER_MS}ms` } : undefined
-              }
-              onClick={() => onNavigate(feature.id)}
-            >
-              <span className="dashboard-card-icon" aria-hidden="true">
-                {feature.icon}
-              </span>
-              <span className="dashboard-card-body">
-                <span className="dashboard-card-title">{feature.title}</span>
-                <span className="dashboard-card-desc">{feature.description}</span>
-              </span>
-            </button>
-          ))}
+          {FEATURES.map((feature, index) => {
+            const isRestricted =
+              (feature.id === "search" || feature.id === "upload") &&
+              !isLawyerOrJudge;
+
+            return (
+              <button
+                key={feature.id}
+                type="button"
+                className={`dashboard-card${
+                  isRestricted ? " dashboard-card-disabled" : ""
+                }`}
+                disabled={isRestricted}
+                style={
+                  cardsVisible
+                    ? { animationDelay: `${index * CARD_STAGGER_MS}ms` }
+                    : undefined
+                }
+                onClick={isRestricted ? undefined : () => onNavigate(feature.id)}
+              >
+                <span className="dashboard-card-icon" aria-hidden="true">
+                  {feature.icon}
+                </span>
+                <span className="dashboard-card-body">
+                  <span className="dashboard-card-title">{feature.title}</span>
+                  <span className="dashboard-card-desc">{feature.description}</span>
+                  {isRestricted && (
+                    <span className="dashboard-card-restriction">
+                      Available for lawyer and judge accounts.
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 

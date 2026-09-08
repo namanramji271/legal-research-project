@@ -11,7 +11,9 @@ from typing import Any
 from urllib.parse import unquote
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from auth import require_role
 from google import genai
 import pdfplumber
 from pydantic import BaseModel
@@ -151,7 +153,10 @@ Summary:"""
 
 
 @router.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_document(
+    file: UploadFile = File(...),
+    user=Depends(require_role("lawyer", "judge")),
+) -> dict[str, Any]:
     """Extract PDF or plain-text content without storing the uploaded file."""
     filename = file.filename or ""
     suffix = Path(filename).suffix.lower()
@@ -188,7 +193,10 @@ class SummarizeUploadedRequest(BaseModel):
 
 
 @router.post("/documents/summarize-uploaded")
-def summarize_uploaded(request: SummarizeUploadedRequest) -> dict[str, str]:
+def summarize_uploaded(
+    request: SummarizeUploadedRequest,
+    user=Depends(require_role("lawyer", "judge")),
+) -> dict[str, str]:
     if not request.extracted_text.strip():
         raise HTTPException(
             status_code=400, detail="extracted_text cannot be empty"
@@ -230,7 +238,10 @@ get_judgment_by_case_name = find_judgment_by_case_name
 
 
 @router.get("/judgments/{case_name}/summary")
-def get_judgment_summary(case_name: str) -> dict[str, str]:
+def get_judgment_summary(
+    case_name: str,
+    user=Depends(require_role("lawyer", "judge")),
+) -> dict[str, str]:
     """Return an AI-generated structured summary for a judgment in the corpus."""
     decoded_case_name = unquote(case_name).strip()
     record = find_judgment_by_case_name(decoded_case_name)

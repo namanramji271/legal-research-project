@@ -6,7 +6,9 @@ import json
 from typing import Any
 
 import chromadb
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+
+from auth import require_role
 
 from bm25_search import bm25_search
 from embeddings import (
@@ -137,6 +139,7 @@ def search_judgments_bge(query: str, n_results: int = 5) -> list[dict[str, Any]]
 def search(
     q: str = Query(..., min_length=1, description="Natural-language legal query"),
     n_results: int = Query(5, ge=1, description="Number of matching chunks to return"),
+    user=Depends(require_role("lawyer", "judge")),
 ) -> list[dict[str, Any]]:
     """Expose semantic judgment retrieval as a frontend-ready JSON response."""
     results = search_judgments(q, n_results)
