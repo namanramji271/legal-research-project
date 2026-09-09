@@ -655,6 +655,37 @@ is described there.
     are untouched (their routes aren't gated).
   Verified end-to-end in-browser across all 4 roles: signup, login/logout,
   nav gating, dashboard-card gating, and direct search access all correct.
+- Judge comparison view: complete. POST /judgments/compare (judge-only,
+  2-3 case_names), reuses summarize_legal_text() per case, returns
+  {results: [{case_name, court, year, ipc_sections, summary}]}.
+  Frontend: ComparisonPage.jsx, judge-only "Compare" toggle on
+  SearchPage.jsx result cards (capped at 3), sticky action bar pattern.
+  Verified end-to-end across judge/lawyer roles.
+- Lawyer case-file export: complete. POST /documents/export-case-file
+  (lawyer+judge, 1+ case_names), generates a .docx via python-docx
+  (case headings, metadata, four-section AI summary per case, page
+  breaks between cases), returned as a StreamingResponse download.
+  Frontend: separate "Add to case file" toggle (independent selection
+  state from judge's Compare toggle, no cap), sticky export bar,
+  blob-based file download on click. Verified end-to-end (docx opens
+  correctly, content matches selected cases, judges see both toggles
+  distinctly, lawyers see only the export toggle).
+  FIX: both toggle buttons' alignment on result cards was inconsistent
+  across differing case-name lengths (wrapped inline with the title in
+  some cases) - fixed to a consistent flex row layout. FIX: Compare bar
+  and Export bar could stack in normal document flow when a judge had
+  both active, forcing a scroll to see the second bar - fixed to both
+  render as position: fixed, stacked directly above one another, always
+  simultaneously visible when both have selections.
+- DESIGN NOTE (identified during review, not yet addressed): Compare and
+  Export currently surface near-identical content (the same per-case AI
+  summary), just reshaped for side-by-side viewing vs. a downloadable
+  doc - flagged as insufficiently differentiated for the two personas'
+  actual real-world needs. Four follow-up features planned to properly
+  differentiate them - see project_status_checklist.md, "Judge/Lawyer
+  feature differentiation" section, for the full list and reasoning
+  (sentencing pattern insight, citation-ready order excerpt, and
+  counter-argument finder, client-ready plain-language summary).
 
 NOT YET BUILT (next): the four persona-specific features this gating
 exists to support — judge side-by-side case comparison, lawyer case-file

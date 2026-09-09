@@ -105,8 +105,12 @@ export default function SearchPage({ auth, onCompare }) {
   const [results, setResults] = useState([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [selectedCases, setSelectedCases] = useState([]);
+  const [caseFileCases, setCaseFileCases] = useState([]);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   const isJudge = auth?.role === "judge";
+  const canExport = auth?.role === "lawyer" || auth?.role === "judge";
   const MAX_COMPARE = 3;
 
   function toggleCaseSelection(caseName) {
@@ -119,6 +123,49 @@ export default function SearchPage({ auth, onCompare }) {
       }
       return [...prev, caseName];
     });
+  }
+
+  function toggleCaseFileSelection(caseName) {
+    setCaseFileCases((prev) => {
+      if (prev.includes(caseName)) {
+        return prev.filter((n) => n !== caseName);
+      }
+      return [...prev, caseName];
+    });
+  }
+
+  async function handleExportCaseFile() {
+    if (caseFileCases.length === 0 || exporting) return;
+    setExporting(true);
+    setExportError("");
+
+    try {
+      const response = await authFetch(`${API_BASE}/documents/export-case-file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ case_names: caseFileCases }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        const detail = errorData?.detail || `Export failed (${response.status})`;
+        throw new Error(detail);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "case_file_export.docx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err.message || "Failed to export case file.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function executeSearch(searchQuery) {
@@ -248,57 +295,118 @@ export default function SearchPage({ auth, onCompare }) {
 
             const isSelected = selectedCases.includes(result.case_name);
             const isAtCap = selectedCases.length >= MAX_COMPARE && !isSelected;
+            const isInCaseFile = caseFileCases.includes(result.case_name);
 
             return (
               <li
                 key={result.case_name}
-                className={`search-result search-result-enter${isSelected ? " search-result-selected" : ""}`}
+                className={`search-result search-result-enter${
+                  isSelected ? " search-result-selected" : ""
+                }${isInCaseFile ? " search-result-in-casefile" : ""}`}
                 style={{ animationDelay: `${index * 75}ms` }}
               >
                 <div className="search-result-header">
-                  <h2>{result.case_name}</h2>
-                  <div className="match-badges">
-                    {result.relevance_label && (
-                      <span className={`relevance-badge ${relevanceClass}`}>
-                        {result.relevance_label}
-                      </span>
-                    )}
-                    {methodBadge && (
-                      <span className="method-badge">{methodBadge}</span>
-                    )}
-                    {isJudge && (
-                      <button
-                        type="button"
-                        className={`compare-toggle${isSelected ? " compare-toggle-active" : ""}${isAtCap ? " compare-toggle-disabled" : ""}`}
-                        disabled={isAtCap}
-                        onClick={() => toggleCaseSelection(result.case_name)}
-                        title={
-                          isSelected
-                            ? "Remove from comparison"
-                            : isAtCap
-                            ? "Maximum 3 cases selected"
-                            : "Add to comparison"
-                        }
-                        aria-pressed={isSelected}
-                      >
-                        {isSelected ? (
-                          <>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                              <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            Added
-                          </>
-                        ) : (
-                          <>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                              <path d="M12 5v14M5 12h14" strokeLinecap="round" />
-                            </svg>
-                            Compare
-                          </>
-                        )}
-                      </button>
-                    )}
+                  <div className="search-result-heading-group">
+                    <h2>{result.case_name}</h2>
+                    <div className="match-badges">
+                      {result.relevance_label && (
+                        <span className={`relevance-badge ${relevanceClass}`}>
+                          {result.relevance_label}
+                        </span>
+                      )}
+                      {methodBadge && (
+                        <span className="method-badge">{methodBadge}</span>
+                      )}
+                    </div>
                   </div>
+
+                  {(canExport || isJudge) && (
+                    <div className="search-result-actions">
+                      {canExport && (
+                        <button
+                          type="button"
+                          className={`casefile-toggle${
+                            isInCaseFile ? " casefile-toggle-active" : ""
+                          }`}
+                          onClick={() => toggleCaseFileSelection(result.case_name)}
+                          title={
+                            isInCaseFile
+                              ? "Remove from case file"
+                              : "Add to case file"
+                          }
+                          aria-pressed={isInCaseFile}
+                        >
+                          {isInCaseFile ? (
+                            <>
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M5 13l4 4L19 7"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                              In case file
+                            </>
+                          ) : (
+                            <>
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                              Add to case file
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {isJudge && (
+                        <button
+                          type="button"
+                          className={`compare-toggle${isSelected ? " compare-toggle-active" : ""}${isAtCap ? " compare-toggle-disabled" : ""}`}
+                          disabled={isAtCap}
+                          onClick={() => toggleCaseSelection(result.case_name)}
+                          title={
+                            isSelected
+                              ? "Remove from comparison"
+                              : isAtCap
+                              ? "Maximum 3 cases selected"
+                              : "Add to comparison"
+                          }
+                          aria-pressed={isSelected}
+                        >
+                          {isSelected ? (
+                            <>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                                <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              Added
+                            </>
+                          ) : (
+                            <>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+                              </svg>
+                              Compare
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <p className="search-meta">
                   {result.court}
@@ -319,28 +427,79 @@ export default function SearchPage({ auth, onCompare }) {
         </ul>
       )}
 
-      {/* Sticky compare action bar — judge only, shown when 2-3 cases selected */}
-      {isJudge && selectedCases.length >= 2 && (
-        <div className="compare-action-bar" role="region" aria-label="Case comparison">
-          <span className="compare-action-label">
-            {selectedCases.length} case{selectedCases.length > 1 ? "s" : ""} selected
-          </span>
-          <div className="compare-action-buttons">
-            <button
-              type="button"
-              className="lookup-button lookup-button-sm"
-              onClick={() => onCompare(selectedCases)}
+      {/* Fixed bottom action bars — lawyer & judge, always in view together */}
+      {((canExport && caseFileCases.length >= 1) || (isJudge && selectedCases.length >= 2)) && (
+        <div className="search-action-dock">
+          {/* Compare bar sits on top if active */}
+          {isJudge && selectedCases.length >= 2 && (
+            <div className="compare-action-bar" role="region" aria-label="Case comparison">
+              <span className="compare-action-label">
+                {selectedCases.length} case{selectedCases.length > 1 ? "s" : ""} selected
+              </span>
+              <div className="compare-action-buttons">
+                <button
+                  type="button"
+                  className="lookup-button lookup-button-sm"
+                  onClick={() => onCompare(selectedCases)}
+                >
+                  Compare {selectedCases.length} selected
+                </button>
+                <button
+                  type="button"
+                  className="lookup-button lookup-button-outline lookup-button-sm"
+                  onClick={() => setSelectedCases([])}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Case file export bar */}
+          {canExport && caseFileCases.length >= 1 && (
+            <div
+              className="casefile-action-bar"
+              role="region"
+              aria-label="Case file export"
             >
-              Compare {selectedCases.length} selected
-            </button>
-            <button
-              type="button"
-              className="lookup-button lookup-button-outline lookup-button-sm"
-              onClick={() => setSelectedCases([])}
-            >
-              Clear
-            </button>
-          </div>
+              <div className="casefile-action-left">
+                <span className="casefile-action-label">
+                  {caseFileCases.length} case{caseFileCases.length > 1 ? "s" : ""} selected for export
+                </span>
+                {exportError && (
+                  <span className="casefile-export-error">{exportError}</span>
+                )}
+              </div>
+              <div className="casefile-action-buttons">
+                <button
+                  type="button"
+                  className="lookup-button lookup-button-sm casefile-export-button"
+                  disabled={exporting}
+                  onClick={handleExportCaseFile}
+                >
+                  {exporting ? (
+                    <>
+                      <span className="button-spinner" aria-hidden="true" />
+                      Generating file…
+                    </>
+                  ) : (
+                    `Export ${caseFileCases.length} case${caseFileCases.length > 1 ? "s" : ""}`
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="lookup-button lookup-button-outline lookup-button-sm"
+                  disabled={exporting}
+                  onClick={() => {
+                    setCaseFileCases([]);
+                    setExportError("");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </section>

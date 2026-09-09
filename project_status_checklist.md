@@ -51,6 +51,13 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 - [ ] Sidebar/nav renders different tools per role
 - [x] **Judge**: side-by-side case comparison view (parallel summaries of 2–3 picked judgments) — `POST /judgments/compare`, judge-only, verified end-to-end (2 and 3 case selection, back-navigation clears state, hidden entirely for other roles)
 - [ ] **Lawyer**: "case file" export — star judgments → export citations/snippets/summaries as PDF/DOCX
+- [ ] Fix: Compare/Export button alignment on result cards (inconsistent position across differing case-name lengths)
+- [ ] Fix: Compare bar + Export bar must both be visible simultaneously (currently stack in normal flow, forcing scroll)
+### Judge/Lawyer feature differentiation (Compare vs. Export currently show near-identical content — being addressed)
+- [ ] Judge: Sentencing pattern insight on Comparison page (aggregate stats from existing ipc302_themes.json labeling — no new Gemini calls)
+- [ ] Judge: Citation-ready order excerpt (formats comparison output as citable paragraph; explicitly does not draft reasoning/outcome — judge remains decision-maker)
+- [ ] Lawyer: Counter-argument finder (reframed adversarial retrieval query over existing corpus — surfaces precedent the opposing side may cite)
+- [ ] Lawyer: Client-ready plain-language summary (reuses the plain-language prompt style planned for the Public persona)
 - [ ] **Student**: conversational/tutor QA mode, no raw multi-result search UI
 - [ ] **Public**: simplified QA + mapping only, no raw search, no document upload
 
@@ -76,6 +83,12 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 - [ ] Extend `find_related_judgments()` to accept OCR'd text through the same path as PDF/TXT
 
 ---
+
+## Part 4.5 — Corpus Expansion (in progress, external dependency)
+- [ ] Contact law-student friend re: access to additional case files
+- [ ] Target: ~100+ judgments (up from current 48), ideally broader IPC section coverage to reduce the existing 302-vs-304 imbalance noted in retrieval findings
+- [ ] Once expanded: re-run retrieval evaluation (precision@5/recall@5/MRR) and note delta vs. current 48-judgment baseline in the paper
+- [ ] Revisit any feature with statistical framing (e.g. sentencing pattern insight) once corpus size grows — current 48-judgment base is explicitly too small for that framing to be presented as statistically meaningful; document this caveat in the paper regardless of when/whether expansion happens
 
 ## Part 5 — Paper & Deliverables
 

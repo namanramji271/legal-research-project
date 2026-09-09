@@ -21,6 +21,9 @@ from pydantic import BaseModel
 from scripts.build_embeddings import chunk_text
 from search import search_judgments
 
+from docx import Document as DocxDocument
+from fastapi.responses import StreamingResponse
+
 
 load_dotenv()
 
@@ -298,3 +301,52 @@ def compare_judgments(
 
     return {"results": results}
 
+class ExportCaseFileRequest(BaseModel):
+    case_names: list[str]
+
+
+@router.post("/documents/export-case-file")
+def export_case_file(
+    request: ExportCaseFileRequest,
+    user=Depends(require_role("lawyer", "judge")),
+) -> StreamingResponse:
+    """Export selected judgments as a single downloadable Word document."""
+    if not request.case_names:
+        raise HTTPException(status_code=400, detail="Provide at least one case_name")
+
+    doc = DocxDocument()
+    doc.add_heading("Case File Export", level=0)
+    doc.add_paragraph(f"Prepared by: {user.username} ({user.role})")
+    doc.add_paragraph(f"Cases included: {len(request.case_names)}")
+
+    missing = []
+    for case_name in request.case_names:
+        record = find_judgment_by_case_name(case_name)
+        if record is None:
+            missing.append(case_name)
+            continue
+
+        doc.add_heading(record.get("case_name", case_name), level=1)
+        meta_parts = [record.get("court", ""), str(record.get("year", ""))]
+        ipc_sections = record.get("ipc_sections", [])
+        if ipc_sections:
+            meta_parts.append(f"IPC {', '.join(str(s) for s in ipc_sections)}")
+        doc.add_paragraph(" · ".join(p for p in meta_parts if p))
+
+        doc.add_paragraph(summarize_legal_text(record["full_text"]))
+        doc.add_page_break()
+
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No judgment found for: {', '.join(missing)}",
+        )
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=case_file_export.docx"},
+    )
