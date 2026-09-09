@@ -2190,6 +2190,102 @@
   align-items: flex-start;
 }
 
+/* ── Theme Stats Panel ───────────────────────────────────────── */
+
+.theme-stats-panel {
+  margin-top: 2.5rem;
+  padding: 1.25rem 1.375rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  animation: softFadeIn 350ms ease-in-out both;
+  animation-delay: 200ms;
+}
+
+.theme-stats-header {
+  margin-bottom: 1.125rem;
+}
+
+.theme-stats-title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.theme-stats-subtitle {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.theme-stats-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.theme-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.theme-stats-row:last-child {
+  border-bottom: none;
+}
+
+.theme-stats-row-shared {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.75rem;
+  margin-left: -0.75rem;
+}
+
+.theme-stats-row-shared .theme-stats-name {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.theme-stats-name {
+  flex: 1 1 auto;
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.theme-stats-count {
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.theme-stats-shared-tag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1875rem 0.5rem;
+  border-radius: 3px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.theme-stats-footnote {
+  margin: 0.875rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* ── Case file export toggle (lawyer + judge) ────────────────── */
 
 .casefile-toggle {

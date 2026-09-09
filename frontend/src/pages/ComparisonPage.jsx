@@ -50,39 +50,132 @@ function SummaryBody({ text }) {
   );
 }
 
+/**
+ * Renders the Sentencing & Evidentiary Patterns panel when is_relevant=true.
+ * Highlights themes shared by 2+ of the currently-compared cases.
+ */
+function ThemeStatsPanel({ stats, caseNames }) {
+  const {
+    total_labeled_cases,
+    untagged_case_count,
+    theme_counts,
+    selected_case_themes,
+  } = stats;
+
+  // Build a set of themes that appear in 2+ of the selected cases
+  const sharedThemes = new Set();
+  if (selected_case_themes) {
+    const themeCaseCount = {};
+    for (const caseName of caseNames) {
+      const themes = selected_case_themes[caseName] ?? [];
+      for (const theme of themes) {
+        themeCaseCount[theme] = (themeCaseCount[theme] ?? 0) + 1;
+      }
+    }
+    for (const [theme, count] of Object.entries(themeCaseCount)) {
+      if (count >= 2) sharedThemes.add(theme);
+    }
+  }
+
+  const themeEntries = Object.entries(theme_counts ?? {}).sort(
+    ([, a], [, b]) => b - a
+  );
+
+  if (themeEntries.length === 0) return null;
+
+  return (
+    <section className="theme-stats-panel" aria-label="Sentencing & Evidentiary Patterns">
+      <div className="theme-stats-header">
+        <h2 className="theme-stats-title">Sentencing &amp; Evidentiary Patterns</h2>
+        <p className="theme-stats-subtitle">
+          Based on {total_labeled_cases} labeled IPC 302 judgments in the current corpus
+        </p>
+      </div>
+
+      <ul className="theme-stats-list">
+        {themeEntries.map(([theme, count]) => {
+          const pct = Math.round((count / total_labeled_cases) * 100);
+          const isShared = sharedThemes.has(theme);
+          return (
+            <li
+              key={theme}
+              className={`theme-stats-row${isShared ? " theme-stats-row-shared" : ""}`}
+            >
+              <span className="theme-stats-name">{theme}</span>
+              <span className="theme-stats-count">
+                {count} of {total_labeled_cases} ({pct}%)
+              </span>
+              {isShared && (
+                <span className="theme-stats-shared-tag" aria-label="Shared by selected cases">
+                  Shared
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {untagged_case_count > 0 && (
+        <p className="theme-stats-footnote">
+          {untagged_case_count} labeled case{untagged_case_count > 1 ? "s" : ""} did not strongly match any theme.
+        </p>
+      )}
+    </section>
+  );
+}
+
 export default function ComparisonPage({ caseNames, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [results, setResults] = useState([]);
+  const [themeStats, setThemeStats] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchComparison() {
+    async function fetchAll() {
       setLoading(true);
       setError("");
       setResults([]);
+      setThemeStats(null);
+
+      const body = JSON.stringify({ case_names: caseNames });
 
       try {
-        const response = await authFetch(`${API_BASE}/judgments/compare`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ case_names: caseNames }),
-        });
+        const [compareRes, themeRes] = await Promise.all([
+          authFetch(`${API_BASE}/judgments/compare`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+          }),
+          authFetch(`${API_BASE}/judgments/theme-stats`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+          }),
+        ]);
 
-        if (!response.ok) {
-          const body = await response.json().catch(() => null);
-          const detail = body?.detail;
+        if (!compareRes.ok) {
+          const errBody = await compareRes.json().catch(() => null);
+          const detail = errBody?.detail;
           throw new Error(
             typeof detail === "string"
               ? detail
-              : `Comparison failed (${response.status})`,
+              : `Comparison failed (${compareRes.status})`,
           );
         }
 
-        const data = await response.json();
+        const data = await compareRes.json();
         if (!cancelled) {
           setResults(Array.isArray(data.results) ? data.results : []);
+        }
+
+        // theme-stats is best-effort — don't fail the page if it errors
+        if (themeRes.ok) {
+          const themeData = await themeRes.json().catch(() => null);
+          if (!cancelled && themeData?.is_relevant) {
+            setThemeStats(themeData);
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -95,7 +188,7 @@ export default function ComparisonPage({ caseNames, onBack }) {
       }
     }
 
-    fetchComparison();
+    fetchAll();
     return () => {
       cancelled = true;
     };
@@ -153,47 +246,53 @@ export default function ComparisonPage({ caseNames, onBack }) {
       )}
 
       {!loading && !error && results.length > 0 && (
-        <div
-          className="comparison-grid"
-          style={{ "--col-count": results.length }}
-        >
-          {results.map((item, index) => (
-            <article
-              key={item.case_name}
-              className="comparison-column search-result-enter"
-              style={{ animationDelay: `${index * 80}ms` }}
-            >
-              {/* Column header */}
-              <header className="comparison-column-header">
-                <h2 className="comparison-case-name">{item.case_name}</h2>
-                <p className="search-meta">
-                  {item.court}
-                  {item.year ? ` · ${item.year}` : ""}
-                </p>
-                {item.ipc_sections?.length > 0 && (
-                  <div className="comparison-section-tags">
-                    {item.ipc_sections.map((sec) => (
-                      <span key={sec} className="comparison-section-tag">
-                        IPC {sec}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </header>
-
-              {/* Summary body */}
-              <div className="comparison-summary-body">
-                {item.summary ? (
-                  <SummaryBody text={item.summary} />
-                ) : (
-                  <p className="summary-body-text comparison-no-summary">
-                    No summary available.
+        <>
+          <div
+            className="comparison-grid"
+            style={{ "--col-count": results.length }}
+          >
+            {results.map((item, index) => (
+              <article
+                key={item.case_name}
+                className="comparison-column search-result-enter"
+                style={{ animationDelay: `${index * 80}ms` }}
+              >
+                {/* Column header */}
+                <header className="comparison-column-header">
+                  <h2 className="comparison-case-name">{item.case_name}</h2>
+                  <p className="search-meta">
+                    {item.court}
+                    {item.year ? ` · ${item.year}` : ""}
                   </p>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
+                  {item.ipc_sections?.length > 0 && (
+                    <div className="comparison-section-tags">
+                      {item.ipc_sections.map((sec) => (
+                        <span key={sec} className="comparison-section-tag">
+                          IPC {sec}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </header>
+
+                {/* Summary body */}
+                <div className="comparison-summary-body">
+                  {item.summary ? (
+                    <SummaryBody text={item.summary} />
+                  ) : (
+                    <p className="summary-body-text comparison-no-summary">
+                      No summary available.
+                    </p>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+
+          {themeStats && (
+            <ThemeStatsPanel stats={themeStats} caseNames={caseNames} />
+          )}
+        </>
       )}
     </section>
   );

@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any
 from urllib.parse import unquote
 
@@ -41,6 +42,7 @@ router = APIRouter()
 SUPPORTED_SUFFIXES = {".pdf", ".txt"}
 DATA_DIR = Path(__file__).resolve().parent / "data"
 JUDGMENTS_FILE = DATA_DIR / "judgments.jsonl"
+THEMES_FILE = Path(__file__).resolve().parent / "eval" / "ipc302_themes.json"
 
 
 def _extract_pdf_text(file_bytes: bytes) -> str:
@@ -143,10 +145,24 @@ Provided text:
 
 Summary:"""
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-    )
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+            )
+            break
+        except Exception:
+            if attempt == 0:
+                time.sleep(2)
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "The AI summarization service is temporarily unavailable. "
+                        "Please try again in a moment."
+                    ),
+                )
     summary_text = response.text or ""
 
     if is_truncated:
@@ -224,6 +240,19 @@ def _load_judgments_index() -> dict[str, dict[str, Any]]:
             if case_name:
                 index[case_name] = record
     return index
+
+@lru_cache(maxsize=1)
+def _load_theme_data() -> dict[str, list[str]]:
+    """Load hand-labeled IPC 302 theme tags from backend/eval/ipc302_themes.json.
+    Pure lookup over existing evaluation labeling - not a new classification
+    step. If this file is regenerated with more cases later, restart the
+    server to pick up the change (same caching tradeoff as
+    _load_judgments_index)."""
+    if not THEMES_FILE.exists():
+        return {}
+    with THEMES_FILE.open("r", encoding="utf-8") as file:
+        records = json.load(file)
+    return {record["case_name"]: record.get("themes", []) for record in records}
 
 
 def find_judgment_by_case_name(case_name: str) -> dict[str, Any] | None:
@@ -350,3 +379,42 @@ def export_case_file(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": "attachment; filename=case_file_export.docx"},
     )
+
+class ThemeStatsRequest(BaseModel):
+    case_names: list[str]
+
+
+@router.post("/judgments/theme-stats")
+def get_theme_stats(
+    request: ThemeStatsRequest,
+    user=Depends(require_role("judge")),
+) -> dict[str, Any]:
+    """Aggregate sentencing/evidentiary theme counts across the labeled IPC
+    302 corpus subset, plus theme membership for the requested cases.
+    Pure aggregation over hand-labeled data - no Gemini calls, no new
+    inference or prediction. Corpus is currently small (see AGENTS.md) -
+    present as descriptive counts, not statistical claims."""
+    theme_data = _load_theme_data()
+    total_labeled_cases = len(theme_data)
+
+    theme_counts: dict[str, int] = {}
+    untagged_count = 0
+    for case_name, themes in theme_data.items():
+        if not themes:
+            untagged_count += 1
+        for theme in themes:
+            theme_counts[theme] = theme_counts.get(theme, 0) + 1
+
+    selected_case_themes = {
+        case_name: theme_data[case_name]
+        for case_name in request.case_names
+        if case_name in theme_data
+    }
+
+    return {
+        "is_relevant": len(selected_case_themes) > 0,
+        "total_labeled_cases": total_labeled_cases,
+        "untagged_case_count": untagged_count,
+        "theme_counts": theme_counts,
+        "selected_case_themes": selected_case_themes,
+    }
