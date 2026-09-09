@@ -49,7 +49,7 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 - [x] Frontend login/signup pages — auth flow, role-gated nav, dashboard cards, and page-level access all verified working across all 4 roles
 - [x] Role-gated backend routes — /search, /documents/upload, /documents/summarize-uploaded, /judgments/{case_name}/summary restricted to lawyer+judge; verified via test script (judge 200, student 403, no token 401) (FastAPI dependency checks role from JWT)
 - [ ] Sidebar/nav renders different tools per role
-- [ ] **Judge**: side-by-side case comparison view (parallel summaries of 2–3 picked judgments)
+- [x] **Judge**: side-by-side case comparison view (parallel summaries of 2–3 picked judgments) — `POST /judgments/compare`, judge-only, verified end-to-end (2 and 3 case selection, back-navigation clears state, hidden entirely for other roles)
 - [ ] **Lawyer**: "case file" export — star judgments → export citations/snippets/summaries as PDF/DOCX
 - [ ] **Student**: conversational/tutor QA mode, no raw multi-result search UI
 - [ ] **Public**: simplified QA + mapping only, no raw search, no document upload

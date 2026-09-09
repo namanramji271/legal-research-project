@@ -8,4 +8,4 @@ chroma_store/
 chroma_db/
 chroma_db_bge/
 data/judgments.jsonl
-backend/data/users.db
+data/users.db

@@ -7,30 +7,9 @@ import SearchPage from "./components/SearchPage.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import SignupPage from "./pages/SignupPage.jsx";
+import ComparisonPage from "./pages/ComparisonPage.jsx";
 import "./App.css";
 
-function renderPage(activePage, onNavigate, auth) {
-  const isLawyerOrJudge = auth?.role === "lawyer" || auth?.role === "judge";
-
-  if ((activePage === "search" || activePage === "upload") && !isLawyerOrJudge) {
-    return <DashboardPage onNavigate={onNavigate} auth={auth} />;
-  }
-
-  switch (activePage) {
-    case "dashboard":
-      return <DashboardPage onNavigate={onNavigate} auth={auth} />;
-    case "mapping":
-      return <MappingLookup auth={auth} />;
-    case "search":
-      return <SearchPage auth={auth} />;
-    case "question":
-      return <QuestionPage auth={auth} />;
-    case "upload":
-      return <DocumentUploadPage auth={auth} />;
-    default:
-      return <DashboardPage onNavigate={onNavigate} auth={auth} />;
-  }
-}
 
 function App() {
   const [auth, setAuth] = useState(() => {
@@ -43,6 +22,7 @@ function App() {
   });
   const [authView, setAuthView] = useState("login");
   const [activePage, setActivePage] = useState("dashboard");
+  const [compareNames, setCompareNames] = useState([]);
 
   const isLawyerOrJudge = auth?.role === "lawyer" || auth?.role === "judge";
 
@@ -52,6 +32,16 @@ function App() {
       return;
     }
     setActivePage(page);
+  }
+
+  function handleCompare(caseNames) {
+    setCompareNames(caseNames);
+    setActivePage("compare");
+  }
+
+  function handleBackFromCompare() {
+    setCompareNames([]);
+    setActivePage("search");
   }
 
   function handleLogout() {
@@ -75,6 +65,45 @@ function App() {
     );
   }
 
+  function renderPage() {
+    if ((activePage === "search" || activePage === "upload") && !isLawyerOrJudge) {
+      return <DashboardPage onNavigate={handleNavigate} auth={auth} />;
+    }
+
+    if (activePage === "compare") {
+      // Only judges can reach compare page
+      if (auth?.role !== "judge" || compareNames.length < 2) {
+        return <DashboardPage onNavigate={handleNavigate} auth={auth} />;
+      }
+      return (
+        <ComparisonPage
+          caseNames={compareNames}
+          onBack={handleBackFromCompare}
+        />
+      );
+    }
+
+    switch (activePage) {
+      case "dashboard":
+        return <DashboardPage onNavigate={handleNavigate} auth={auth} />;
+      case "mapping":
+        return <MappingLookup auth={auth} />;
+      case "search":
+        return (
+          <SearchPage
+            auth={auth}
+            onCompare={handleCompare}
+          />
+        );
+      case "question":
+        return <QuestionPage auth={auth} />;
+      case "upload":
+        return <DocumentUploadPage auth={auth} />;
+      default:
+        return <DashboardPage onNavigate={handleNavigate} auth={auth} />;
+    }
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -86,7 +115,7 @@ function App() {
       <div className="app-content">
         <main className={`app-main${activePage === "dashboard" ? " app-main-dashboard" : ""}`}>
           <div key={activePage} className="page-fade">
-            {renderPage(activePage, handleNavigate, auth)}
+            {renderPage()}
           </div>
         </main>
       </div>

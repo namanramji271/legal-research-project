@@ -257,4 +257,44 @@ def get_judgment_summary(
     summary = summarize_legal_text(record["full_text"])
     return {"case_name": case_name, "summary": summary}
 
+class CompareCasesRequest(BaseModel):
+    case_names: list[str]
+
+
+@router.post("/judgments/compare")
+def compare_judgments(
+    request: CompareCasesRequest,
+    user=Depends(require_role("judge")),
+) -> dict[str, Any]:
+    """Summarize 2-3 judgments side by side for judge case comparison."""
+    if not 2 <= len(request.case_names) <= 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide between 2 and 3 case_names to compare",
+        )
+
+    results = []
+    missing = []
+    for case_name in request.case_names:
+        record = find_judgment_by_case_name(case_name)
+        if record is None:
+            missing.append(case_name)
+            continue
+        results.append(
+            {
+                "case_name": record.get("case_name", case_name),
+                "court": record.get("court", ""),
+                "year": record.get("year"),
+                "ipc_sections": record.get("ipc_sections", []),
+                "summary": summarize_legal_text(record["full_text"]),
+            }
+        )
+
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No judgment found for: {', '.join(missing)}",
+        )
+
+    return {"results": results}
 

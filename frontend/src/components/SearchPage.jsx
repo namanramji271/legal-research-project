@@ -98,12 +98,28 @@ function HighlightedSnippet({ text, terms }) {
   );
 }
 
-export default function SearchPage() {
+export default function SearchPage({ auth, onCompare }) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [selectedCases, setSelectedCases] = useState([]);
+
+  const isJudge = auth?.role === "judge";
+  const MAX_COMPARE = 3;
+
+  function toggleCaseSelection(caseName) {
+    setSelectedCases((prev) => {
+      if (prev.includes(caseName)) {
+        return prev.filter((n) => n !== caseName);
+      }
+      if (prev.length >= MAX_COMPARE) {
+        return prev; // cap at 3
+      }
+      return [...prev, caseName];
+    });
+  }
 
   async function executeSearch(searchQuery) {
     const trimmed = searchQuery.trim();
@@ -230,10 +246,13 @@ export default function SearchPage() {
                 ? "relevance-badge-moderate"
                 : "relevance-badge-weak";
 
+            const isSelected = selectedCases.includes(result.case_name);
+            const isAtCap = selectedCases.length >= MAX_COMPARE && !isSelected;
+
             return (
               <li
                 key={result.case_name}
-                className="search-result search-result-enter"
+                className={`search-result search-result-enter${isSelected ? " search-result-selected" : ""}`}
                 style={{ animationDelay: `${index * 75}ms` }}
               >
                 <div className="search-result-header">
@@ -246,6 +265,38 @@ export default function SearchPage() {
                     )}
                     {methodBadge && (
                       <span className="method-badge">{methodBadge}</span>
+                    )}
+                    {isJudge && (
+                      <button
+                        type="button"
+                        className={`compare-toggle${isSelected ? " compare-toggle-active" : ""}${isAtCap ? " compare-toggle-disabled" : ""}`}
+                        disabled={isAtCap}
+                        onClick={() => toggleCaseSelection(result.case_name)}
+                        title={
+                          isSelected
+                            ? "Remove from comparison"
+                            : isAtCap
+                            ? "Maximum 3 cases selected"
+                            : "Add to comparison"
+                        }
+                        aria-pressed={isSelected}
+                      >
+                        {isSelected ? (
+                          <>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                              <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            Added
+                          </>
+                        ) : (
+                          <>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                              <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+                            </svg>
+                            Compare
+                          </>
+                        )}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -266,6 +317,31 @@ export default function SearchPage() {
             );
           })}
         </ul>
+      )}
+
+      {/* Sticky compare action bar — judge only, shown when 2-3 cases selected */}
+      {isJudge && selectedCases.length >= 2 && (
+        <div className="compare-action-bar" role="region" aria-label="Case comparison">
+          <span className="compare-action-label">
+            {selectedCases.length} case{selectedCases.length > 1 ? "s" : ""} selected
+          </span>
+          <div className="compare-action-buttons">
+            <button
+              type="button"
+              className="lookup-button lookup-button-sm"
+              onClick={() => onCompare(selectedCases)}
+            >
+              Compare {selectedCases.length} selected
+            </button>
+            <button
+              type="button"
+              className="lookup-button lookup-button-outline lookup-button-sm"
+              onClick={() => setSelectedCases([])}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
       )}
     </section>
   );
