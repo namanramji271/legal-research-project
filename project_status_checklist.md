@@ -58,8 +58,9 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 
 ### Judge/Lawyer feature differentiation (Compare vs. Export originally showed near-identical content)
 - [x] Judge: Sentencing pattern insight on Comparison page (aggregate stats from existing ipc302_themes.json labeling — no new Gemini calls) — verified: shared-theme highlighting correct across themed/untagged/out-of-scope case combinations; panel correctly hidden when no selected case is in the themed set
-- [ ] Judge: Citation-ready order excerpt (formats comparison output as citable paragraph; explicitly does not draft reasoning/outcome — judge remains decision-maker)
+- [ ] Judge: Citation-ready order excerpt (formats comparison output as citable paragraph; explicitly does not draft reasoning/outcome — judge remains decision-maker) — built, verification pending (blocked by Gemini free-tier daily quota during testing session)
 - [x] Lawyer: Counter-argument finder (reframed adversarial retrieval query over existing corpus — surfaces precedent the opposing side may cite) — `POST /documents/counter-arguments`, lawyer+judge, verified: on-point counter-queries generated per case, no duplicate case names in results, dedup fix applied
+- [x] Lawyer: Client-ready plain-language summary (reuses the plain-language prompt style planned for the Public persona) — `POST /documents/client-summary`, lawyer+judge, verified: jargon-free, no case names/citations, inline accordion expand/collapse, cached on repeat clicks
 - [x] Fix: Search page query/results now persist in App.jsx state (previously lost on navigating to Compare/Export/Counter-arguments and back)
 - [ ] Lawyer: Client-ready plain-language summary (reuses the plain-language prompt style planned for the Public persona)
 - [x] Fix: Gemini API calls now retry once on transient failure (e.g. 503) before returning a clean user-facing error instead of a raw 500

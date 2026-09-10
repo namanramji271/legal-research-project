@@ -130,6 +130,44 @@ export default function ComparisonPage({ caseNames, onBack }) {
   const [results, setResults] = useState([]);
   const [themeStats, setThemeStats] = useState(null);
 
+  const [excerptLoading, setExcerptLoading] = useState(false);
+  const [excerptError, setExcerptError] = useState("");
+  const [excerpt, setExcerpt] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function handleGenerateExcerpt() {
+    setExcerptLoading(true);
+    setExcerptError("");
+    try {
+      const res = await authFetch(`${API_BASE}/judgments/citation-excerpt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ case_names: caseNames }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || `Failed to generate citation excerpt (${res.status})`);
+      }
+      const data = await res.json();
+      setExcerpt(data.excerpt || "");
+    } catch (err) {
+      setExcerptError(err.message || "Failed to generate citation excerpt.");
+    } finally {
+      setExcerptLoading(false);
+    }
+  }
+
+  async function handleCopyExcerpt() {
+    if (!excerpt) return;
+    try {
+      await navigator.clipboard.writeText(excerpt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback if clipboard API is blocked
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -227,6 +265,71 @@ export default function ComparisonPage({ caseNames, onBack }) {
         Side-by-side summary of facts, legal questions, holdings, and reasoning
         for each selected judgment.
       </p>
+
+      {/* Citation excerpt generator — judge only */}
+      <div className="citation-excerpt-section">
+        <div className="citation-excerpt-controls">
+          <button
+            type="button"
+            className="lookup-button lookup-button-outline lookup-button-sm citation-excerpt-button"
+            disabled={excerptLoading}
+            onClick={handleGenerateExcerpt}
+          >
+            {excerptLoading ? (
+              <>
+                <span className="button-spinner" aria-hidden="true" />
+                Generating excerpt…
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <path d="M7 8h10M7 12h7m-7 4h10M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Generate citation excerpt
+              </>
+            )}
+          </button>
+        </div>
+
+        {excerptError && (
+          <p className="lookup-message lookup-error citation-excerpt-error">{excerptError}</p>
+        )}
+
+        {excerpt && (
+          <div className="citation-excerpt-card" role="region" aria-label="Citation excerpt">
+            <div className="citation-excerpt-header">
+              <span className="citation-excerpt-badge">Citation excerpt</span>
+              <button
+                type="button"
+                className="lookup-button lookup-button-outline lookup-button-sm citation-copy-button"
+                onClick={handleCopyExcerpt}
+              >
+                {copied ? (
+                  <>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                      <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                      <path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    Copy to clipboard
+                  </>
+                )}
+              </button>
+            </div>
+            <blockquote className="citation-excerpt-quote">
+              <p>{excerpt}</p>
+            </blockquote>
+            <p className="citation-excerpt-caption">
+              Citation assembly only - does not represent a legal finding or decision.
+            </p>
+          </div>
+        )}
+      </div>
 
       {loading && (
         <LoadingSpinner label="Generating comparison summaries…" />

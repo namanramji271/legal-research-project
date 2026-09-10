@@ -203,6 +203,79 @@ Respond with ONLY the search query text, nothing else, no quotes, no preamble.""
         detail="The AI counter-argument service is temporarily unavailable. Please try again in a moment.",
     ) from last_error
 
+def _generate_citation_excerpt(results: list[dict[str, Any]]) -> str:
+    """Format compared cases into a citable paragraph a judge could adapt
+    into a draft order. Assembles citations/phrasing only - does NOT draft
+    reasoning, findings, or an outcome. The judge remains the decision-maker;
+    state this explicitly wherever this feature is described."""
+    case_summaries = "\n\n".join(
+        f"Case: {r['case_name']} ({r.get('court', '')}, {r.get('year', '')})\n"
+        f"Summary: {r['summary']}"
+        for r in results
+    )
+    prompt = f"""You are assisting a judge in drafting an order. Given the following
+case summaries, write a single citable paragraph (under 150 words) that
+references these cases by name in the style used in Indian judicial orders
+(e.g. "As held in X v. Y..." or "See also Z, where...").
+
+IMPORTANT: Only summarize and cite what these cases held. Do NOT draft any
+finding, reasoning, or outcome for a new case. Do NOT state what the judge
+should decide. This is a citation-assembly aid only.
+
+Case summaries:
+{case_summaries}
+
+Citable paragraph:"""
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            text = (response.text or "").strip()
+            if text:
+                return text
+        except Exception as error:
+            last_error = error
+            time.sleep(2)
+    raise HTTPException(
+        status_code=503,
+        detail="The AI citation service is temporarily unavailable. Please try again in a moment.",
+    ) from last_error
+
+def _generate_client_summary(full_text: str) -> str:
+    """Plain-language summary with no legal jargon and no raw citations,
+    meant for a lawyer to share directly with a client."""
+    truncated = full_text[:20000]
+    prompt = f"""You are explaining a court case to a client who has no legal training.
+
+Using ONLY the text below, write a plain-language explanation (under 150 words)
+of what happened and what the court decided. Rules:
+- No legal jargon (avoid terms like "appellant", "holding", "culpable" - use
+  everyday words instead, e.g. "the person who appealed", "the court's decision")
+- Do NOT cite case names, section numbers, or court names
+- Do NOT give legal advice or say what this means for the client's own situation
+- Focus only on: what happened, and what the court decided
+
+Case text:
+{truncated}
+
+Plain-language explanation:"""
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            text = (response.text or "").strip()
+            if text:
+                return text
+        except Exception as error:
+            last_error = error
+            time.sleep(2)
+    raise HTTPException(
+        status_code=503,
+        detail="The AI summary service is temporarily unavailable. Please try again in a moment.",
+    ) from last_error
+
 @router.post("/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),
@@ -362,6 +435,45 @@ def compare_judgments(
 
     return {"results": results}
 
+@router.post("/judgments/citation-excerpt")
+def get_citation_excerpt(
+    request: CompareCasesRequest,
+    user=Depends(require_role("judge")),
+) -> dict[str, str]:
+    """Generate a citable paragraph from already-compared cases. Reuses the
+    same summaries as /judgments/compare (one extra Gemini call for the
+    synthesis itself)."""
+    if not 2 <= len(request.case_names) <= 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide between 2 and 3 case_names",
+        )
+
+    results = []
+    missing = []
+    for case_name in request.case_names:
+        record = find_judgment_by_case_name(case_name)
+        if record is None:
+            missing.append(case_name)
+            continue
+        results.append(
+            {
+                "case_name": record.get("case_name", case_name),
+                "court": record.get("court", ""),
+                "year": record.get("year"),
+                "summary": summarize_legal_text(record["full_text"]),
+            }
+        )
+
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No judgment found for: {', '.join(missing)}",
+        )
+
+    excerpt = _generate_citation_excerpt(results)
+    return {"excerpt": excerpt}
+
 class ExportCaseFileRequest(BaseModel):
     case_names: list[str]
 
@@ -505,3 +617,23 @@ def find_counter_arguments(
         )
 
     return {"results": results}
+
+class ClientSummaryRequest(BaseModel):
+    case_name: str
+
+
+@router.post("/documents/client-summary")
+def get_client_summary(
+    request: ClientSummaryRequest,
+    user=Depends(require_role("lawyer", "judge")),
+) -> dict[str, str]:
+    """Generate a plain-language, jargon-free, citation-free summary of a
+    single case, meant for a lawyer to share with a client."""
+    record = find_judgment_by_case_name(request.case_name)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No judgment found with case_name: {request.case_name}",
+        )
+    summary = _generate_client_summary(record["full_text"])
+    return {"case_name": request.case_name, "client_summary": summary}

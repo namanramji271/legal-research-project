@@ -125,11 +125,74 @@ export default function SearchPage({
   const [selectedCases, setSelectedCases] = useState([]);
   const [caseFileCases, setCaseFileCases] = useState([]);
   const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState("");
+  const [clientSummaries, setClientSummaries] = useState({}); // { [case_name]: { loading, error, summary, expanded } }
 
   const isJudge = auth?.role === "judge";
   const canExport = auth?.role === "lawyer" || auth?.role === "judge";
+  const canViewClientSummary = auth?.role === "lawyer" || auth?.role === "judge";
   const MAX_COMPARE = 3;
+
+  async function toggleClientSummary(caseName) {
+    const current = clientSummaries[caseName];
+
+    // If already expanded, toggle collapse
+    if (current?.expanded) {
+      setClientSummaries((prev) => ({
+        ...prev,
+        [caseName]: { ...prev[caseName], expanded: false },
+      }));
+      return;
+    }
+
+    // If already has summary, re-expand without refetching
+    if (current?.summary) {
+      setClientSummaries((prev) => ({
+        ...prev,
+        [caseName]: { ...prev[caseName], expanded: true },
+      }));
+      return;
+    }
+
+    // Fetch from backend
+    setClientSummaries((prev) => ({
+      ...prev,
+      [caseName]: { loading: true, error: "", summary: "", expanded: true },
+    }));
+
+    try {
+      const res = await authFetch(`${API_BASE}/documents/client-summary`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ case_name: caseName }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || `Failed to fetch client summary (${res.status})`);
+      }
+
+      const data = await res.json();
+      setClientSummaries((prev) => ({
+        ...prev,
+        [caseName]: {
+          loading: false,
+          error: "",
+          summary: data.client_summary || "",
+          expanded: true,
+        },
+      }));
+    } catch (err) {
+      setClientSummaries((prev) => ({
+        ...prev,
+        [caseName]: {
+          loading: false,
+          error: err.message || "Failed to load client summary.",
+          summary: "",
+          expanded: true,
+        },
+      }));
+    }
+  }
 
   function toggleCaseSelection(caseName) {
     setSelectedCases((prev) => {
@@ -340,6 +403,26 @@ export default function SearchPage({
 
                   {(canExport || isJudge) && (
                     <div className="search-result-actions">
+                      {canViewClientSummary && (
+                        <button
+                          type="button"
+                          className={`client-summary-toggle${
+                            clientSummaries[result.case_name]?.expanded ? " client-summary-toggle-active" : ""
+                          }`}
+                          onClick={() => toggleClientSummary(result.case_name)}
+                          title={
+                            clientSummaries[result.case_name]?.expanded
+                              ? "Hide client summary"
+                              : "View plain-language summary for clients"
+                          }
+                          aria-expanded={Boolean(clientSummaries[result.case_name]?.expanded)}
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                            <path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          Client summary
+                        </button>
+                      )}
                       {canExport && (
                         <button
                           type="button"
@@ -439,6 +522,41 @@ export default function SearchPage({
                   text={result.snippet}
                   terms={result.matched_terms}
                 />
+
+                {/* Inline accordion for Client summary */}
+                {clientSummaries[result.case_name]?.expanded && (
+                  <div className="client-summary-panel" role="region" aria-label="Client summary">
+                    <div className="client-summary-header">
+                      <span className="client-summary-badge">Client summary</span>
+                    </div>
+
+                    {clientSummaries[result.case_name]?.loading && (
+                      <div className="client-summary-loading">
+                        <span className="button-spinner" aria-hidden="true" />
+                        Generating plain-language summary…
+                      </div>
+                    )}
+
+                    {clientSummaries[result.case_name]?.error && (
+                      <p className="lookup-message lookup-error client-summary-error">
+                        {clientSummaries[result.case_name].error}
+                      </p>
+                    )}
+
+                    {!clientSummaries[result.case_name]?.loading &&
+                      !clientSummaries[result.case_name]?.error &&
+                      clientSummaries[result.case_name]?.summary && (
+                        <>
+                          <p className="client-summary-text">
+                            {clientSummaries[result.case_name].summary}
+                          </p>
+                          <p className="client-summary-caption">
+                            Plain-language summary - share with clients as needed.
+                          </p>
+                        </>
+                      )}
+                  </div>
+                )}
               </li>
             );
           })}
