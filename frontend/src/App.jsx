@@ -8,6 +8,7 @@ import Sidebar from "./components/Sidebar.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import SignupPage from "./pages/SignupPage.jsx";
 import ComparisonPage from "./pages/ComparisonPage.jsx";
+import CounterArgumentsPage from "./pages/CounterArgumentsPage.jsx";
 import "./App.css";
 
 
@@ -23,6 +24,10 @@ function App() {
   const [authView, setAuthView] = useState("login");
   const [activePage, setActivePage] = useState("dashboard");
   const [compareNames, setCompareNames] = useState([]);
+  const [counterArgumentNames, setCounterArgumentNames] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchHasSearched, setSearchHasSearched] = useState(false);
 
   const isLawyerOrJudge = auth?.role === "lawyer" || auth?.role === "judge";
 
@@ -44,11 +49,26 @@ function App() {
     setActivePage("search");
   }
 
+  function handleFindCounterArguments(caseNames) {
+    setCounterArgumentNames(caseNames);
+    setActivePage("counter-arguments");
+  }
+
+  function handleBackFromCounterArguments() {
+    setCounterArgumentNames([]);
+    setActivePage("search");
+  }
+
   function handleLogout() {
     localStorage.removeItem("auth");
     setAuth(null);
     setActivePage("dashboard");
     setAuthView("login");
+    setCompareNames([]);
+    setCounterArgumentNames([]);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchHasSearched(false);
   }
 
   if (!auth) {
@@ -83,6 +103,19 @@ function App() {
       );
     }
 
+    if (activePage === "counter-arguments") {
+      // Lawyer and judge can reach counter-arguments page
+      if (!isLawyerOrJudge || counterArgumentNames.length < 1) {
+        return <DashboardPage onNavigate={handleNavigate} auth={auth} />;
+      }
+      return (
+        <CounterArgumentsPage
+          caseNames={counterArgumentNames}
+          onBack={handleBackFromCounterArguments}
+        />
+      );
+    }
+
     switch (activePage) {
       case "dashboard":
         return <DashboardPage onNavigate={handleNavigate} auth={auth} />;
@@ -93,6 +126,13 @@ function App() {
           <SearchPage
             auth={auth}
             onCompare={handleCompare}
+            onFindCounterArguments={handleFindCounterArguments}
+            query={searchQuery}
+            setQuery={setSearchQuery}
+            results={searchResults}
+            setResults={setSearchResults}
+            hasSearched={searchHasSearched}
+            setHasSearched={setSearchHasSearched}
           />
         );
       case "question":

@@ -170,6 +170,38 @@ Summary:"""
 
     return summary_text
 
+def _generate_counter_query(case_name: str, full_text: str) -> str:
+    """Ask Gemini for a short adversarial search query surfacing precedent
+    that argues against, distinguishes, or contradicts this case's holding.
+    This is the only new Gemini call this feature needs - retrieval itself
+    reuses search_judgments() unchanged."""
+    truncated = full_text[:8000]
+    prompt = f"""You are a legal research assistant helping a lawyer stress-test their own case.
+
+Given the following judgment text, write ONE short search query (5-12 words)
+that would help find OTHER judgments in a legal corpus that argue against,
+distinguish, or reach a contrary legal conclusion to this case's holding.
+Focus on the specific legal test or principle at issue, not just the topic.
+
+Judgment text:
+{truncated}
+
+Respond with ONLY the search query text, nothing else, no quotes, no preamble."""
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            query = (response.text or "").strip().strip('"')
+            if query:
+                return query
+        except Exception as error:
+            last_error = error
+            time.sleep(2)
+    raise HTTPException(
+        status_code=503,
+        detail="The AI counter-argument service is temporarily unavailable. Please try again in a moment.",
+    ) from last_error
 
 @router.post("/documents/upload")
 async def upload_document(
@@ -418,3 +450,58 @@ def get_theme_stats(
         "theme_counts": theme_counts,
         "selected_case_themes": selected_case_themes,
     }
+
+class CounterArgumentsRequest(BaseModel):
+    case_names: list[str]
+
+
+@router.post("/documents/counter-arguments")
+def find_counter_arguments(
+    request: CounterArgumentsRequest,
+    user=Depends(require_role("lawyer", "judge")),
+) -> dict[str, Any]:
+    """For each selected case, surface precedent that may argue against it -
+    helps a lawyer stress-test their own supporting case list before relying
+    on it. Reuses the existing search engine adversarially; not a new
+    retrieval method."""
+    if not request.case_names:
+        raise HTTPException(status_code=400, detail="Provide at least one case_name")
+
+    selected_set = set(request.case_names)
+    results = []
+    missing = []
+
+    for case_name in request.case_names:
+        record = find_judgment_by_case_name(case_name)
+        if record is None:
+            missing.append(case_name)
+            continue
+
+        counter_query = _generate_counter_query(case_name, record["full_text"])
+        candidates = search_judgments(counter_query, n_results=8)
+        seen_case_names: set[str] = set()
+        counter_cases = []
+        for c in candidates:
+            name = c.get("case_name")
+            if not name or name in selected_set or name in seen_case_names:
+                continue
+            seen_case_names.add(name)
+            counter_cases.append(c)
+            if len(counter_cases) == 5:
+                break
+
+        results.append(
+            {
+                "case_name": record.get("case_name", case_name),
+                "counter_query": counter_query,
+                "counter_cases": counter_cases,
+            }
+        )
+
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No judgment found for: {', '.join(missing)}",
+        )
+
+    return {"results": results}

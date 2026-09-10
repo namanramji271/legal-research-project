@@ -98,12 +98,30 @@ function HighlightedSnippet({ text, terms }) {
   );
 }
 
-export default function SearchPage({ auth, onCompare }) {
-  const [query, setQuery] = useState("");
+export default function SearchPage({
+  auth,
+  onCompare,
+  onFindCounterArguments,
+  query: queryProp,
+  setQuery: setQueryProp,
+  results: resultsProp,
+  setResults: setResultsProp,
+  hasSearched: hasSearchedProp,
+  setHasSearched: setHasSearchedProp,
+}) {
+  const [localQuery, setLocalQuery] = useState("");
+  const [localResults, setLocalResults] = useState([]);
+  const [localHasSearched, setLocalHasSearched] = useState(false);
+
+  const query = queryProp !== undefined ? queryProp : localQuery;
+  const setQuery = setQueryProp || setLocalQuery;
+  const results = resultsProp !== undefined ? resultsProp : localResults;
+  const setResults = setResultsProp || setLocalResults;
+  const hasSearched = hasSearchedProp !== undefined ? hasSearchedProp : localHasSearched;
+  const setHasSearched = setHasSearchedProp || setLocalHasSearched;
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [results, setResults] = useState([]);
-  const [hasSearched, setHasSearched] = useState(false);
   const [selectedCases, setSelectedCases] = useState([]);
   const [caseFileCases, setCaseFileCases] = useState([]);
   const [exporting, setExporting] = useState(false);
@@ -471,6 +489,18 @@ export default function SearchPage({ auth, onCompare }) {
                 )}
               </div>
               <div className="casefile-action-buttons">
+                <button
+                  type="button"
+                  className="lookup-button lookup-button-outline lookup-button-sm casefile-counter-button"
+                  disabled={exporting}
+                  onClick={() => onFindCounterArguments && onFindCounterArguments(caseFileCases)}
+                  title="Find opposing precedents for selected cases"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                    <path d="M7 16V4m0 0L3 8m4-4l4 4m6 4v12m0 0l4-4m-4 4l-4-4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Find counter-arguments
+                </button>
                 <button
                   type="button"
                   className="lookup-button lookup-button-sm casefile-export-button"

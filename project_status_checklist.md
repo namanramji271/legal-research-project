@@ -59,7 +59,8 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 ### Judge/Lawyer feature differentiation (Compare vs. Export originally showed near-identical content)
 - [x] Judge: Sentencing pattern insight on Comparison page (aggregate stats from existing ipc302_themes.json labeling — no new Gemini calls) — verified: shared-theme highlighting correct across themed/untagged/out-of-scope case combinations; panel correctly hidden when no selected case is in the themed set
 - [ ] Judge: Citation-ready order excerpt (formats comparison output as citable paragraph; explicitly does not draft reasoning/outcome — judge remains decision-maker)
-- [ ] Lawyer: Counter-argument finder (reframed adversarial retrieval query over existing corpus — surfaces precedent the opposing side may cite)
+- [x] Lawyer: Counter-argument finder (reframed adversarial retrieval query over existing corpus — surfaces precedent the opposing side may cite) — `POST /documents/counter-arguments`, lawyer+judge, verified: on-point counter-queries generated per case, no duplicate case names in results, dedup fix applied
+- [x] Fix: Search page query/results now persist in App.jsx state (previously lost on navigating to Compare/Export/Counter-arguments and back)
 - [ ] Lawyer: Client-ready plain-language summary (reuses the plain-language prompt style planned for the Public persona)
 - [x] Fix: Gemini API calls now retry once on transient failure (e.g. 503) before returning a clean user-facing error instead of a raw 500
 
@@ -83,6 +84,14 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 - [ ] OCR pipeline needed — current Document Upload only handles PDF/TXT (pdfplumber doesn't OCR images)
 - [ ] Options: local Tesseract OCR (free, no quota, lower accuracy) vs. a vision-capable API call (better accuracy, costs quota/money)
 - [ ] Extend `find_related_judgments()` to accept OCR'd text through the same path as PDF/TXT
+
+---
+
+## Part 4.5 — Corpus Expansion (in progress, external dependency)
+- [ ] Contact law-student friend re: access to additional case files
+- [ ] Target: ~100+ judgments (up from current 48), ideally broader IPC section coverage to reduce the existing 302-vs-304 imbalance noted in retrieval findings
+- [ ] Once expanded: re-run retrieval evaluation (precision@5/recall@5/MRR) and note delta vs. current 48-judgment baseline in the paper
+- [ ] Revisit any feature with statistical framing (e.g. sentencing pattern insight) once corpus size grows — current 48-judgment base is explicitly too small for that framing to be presented as statistically meaningful; document this caveat in the paper regardless of when/whether expansion happens
 
 ---
 
