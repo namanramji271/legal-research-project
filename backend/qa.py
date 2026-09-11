@@ -8,6 +8,7 @@ answer as "verified".
 """
 import os
 import re
+import time
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
@@ -35,12 +36,41 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 router = APIRouter()
 
 
+class ConversationTurn(BaseModel):
+    question: str
+    answer: str
+
+
 class AskRequest(BaseModel):
     question: str
     n_results: int = 10
+    persona: str | None = None
+    conversation_history: list[ConversationTurn] = []
 
 
-def build_prompt(question: str, chunks: list[dict]) -> str:
+MAX_HISTORY_TURNS = 5  # cap forwarded to Gemini; older turns stay in the UI only
+
+PERSONA_INSTRUCTIONS = {
+    "student": (
+        "\n\nAfter answering, add a section titled 'Why this matters:' that "
+        "explains the underlying legal principle in plain terms suitable for "
+        "someone learning the law for the first time."
+    ),
+    "public": (
+        "\n\nWrite the answer in plain, everyday English suitable for someone "
+        "with no legal background. Do not use legal jargon. Do not mention "
+        "case names, section numbers, or court names in your answer text "
+        "itself - explain the underlying idea in plain terms instead."
+    ),
+}
+
+
+def build_prompt(
+    question: str,
+    chunks: list[dict],
+    persona: str | None = None,
+    conversation_history: list[ConversationTurn] | None = None,
+) -> str:
     context_blocks = []
     for i, chunk in enumerate(chunks, start=1):
         context_blocks.append(
@@ -50,6 +80,20 @@ def build_prompt(question: str, chunks: list[dict]) -> str:
         )
     context_text = "\n\n".join(context_blocks)
 
+    history_block = ""
+    if conversation_history:
+        recent_turns = conversation_history[-MAX_HISTORY_TURNS:]
+        history_lines = [
+            f"Q: {turn.question}\nA: {turn.answer}" for turn in recent_turns
+        ]
+        history_block = (
+            "\n\nPrevious conversation in this session (for context only - "
+            "still answer strictly from the Context below, not from memory "
+            "of these prior answers):\n" + "\n\n".join(history_lines)
+        )
+
+    persona_instructions = PERSONA_INSTRUCTIONS.get(persona, "")
+
     return f"""You are a legal research assistant. Answer the question below
 using ONLY the context provided. Every claim you make must be traceable to
 one of the sources listed. When you refer to a case, use its exact case
@@ -57,7 +101,8 @@ name as given in the context (e.g. "ILDC case 1970_1"), do not paraphrase
 or invent case names.
 
 If the context does not contain enough information to answer the question,
-say so explicitly rather than guessing or using outside knowledge.
+say so explicitly rather than guessing or using outside knowledge.{persona_instructions}
+{history_block}
 
 Context:
 {context_text}
@@ -93,7 +138,26 @@ def find_unverifiable_citations(answer_text: str, known_case_names: list[str]) -
     return sorted(mentioned_ilcd_style - known_set)
 
 
-def ask_question(question: str, n_results: int = 5) -> dict:
+def _call_gemini_with_retry(prompt: str):
+    last_error = None
+    for attempt in range(2):
+        try:
+            return client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        except Exception as error:
+            last_error = error
+            time.sleep(2)
+    raise HTTPException(
+        status_code=503,
+        detail="The AI answering service is temporarily unavailable. Please try again in a moment.",
+    ) from last_error
+
+
+def ask_question(
+    question: str,
+    n_results: int = 5,
+    persona: str | None = None,
+    conversation_history: list[ConversationTurn] | None = None,
+) -> dict:
     chunks = search_judgments(question, n_results=n_results)
 
     if not chunks:
@@ -104,12 +168,9 @@ def ask_question(question: str, n_results: int = 5) -> dict:
             "unverified_citations": [],
         }
 
-    prompt = build_prompt(question, chunks)
+    prompt = build_prompt(question, chunks, persona=persona, conversation_history=conversation_history)
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-    )
+    response = _call_gemini_with_retry(prompt)
     answer_text = response.text
 
     known_case_names = [c["case_name"] for c in chunks]
@@ -129,7 +190,12 @@ def ask_question(question: str, n_results: int = 5) -> dict:
 def ask(request: AskRequest):
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
-    return ask_question(request.question, request.n_results)
+    return ask_question(
+        request.question,
+        request.n_results,
+        persona=request.persona,
+        conversation_history=request.conversation_history,
+    )
 
 
 # --- Utility: run this directly if MODEL_NAME above ever errors out ---

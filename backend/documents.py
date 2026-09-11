@@ -231,10 +231,13 @@ Citable paragraph:"""
     for attempt in range(2):
         try:
             response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            print(f"DEBUG citation-excerpt raw response: {response!r}")
             text = (response.text or "").strip()
             if text:
                 return text
+            print("DEBUG citation-excerpt: response.text was empty")
         except Exception as error:
+            print(f"DEBUG citation-excerpt error: {type(error).__name__}: {error}")
             last_error = error
             time.sleep(2)
     raise HTTPException(
