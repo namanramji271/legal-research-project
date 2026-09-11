@@ -152,13 +152,27 @@ def _call_gemini_with_retry(prompt: str):
     ) from last_error
 
 
+def _build_retrieval_query(question: str, conversation_history: list[ConversationTurn] | None) -> str:
+    """For vague follow-ups ('give an example', 'why?'), the raw question
+    alone often lacks enough legal vocabulary for retrieval to match
+    anything. Anchor retrieval with the most recent prior question's text
+    too, so follow-ups inherit that topic's search terms. Does not affect
+    what's shown to the user or sent to Gemini as 'the question' - only
+    what's used to find source chunks."""
+    if not conversation_history:
+        return question
+    last_question = conversation_history[-1].question
+    return f"{last_question} {question}"
+
+
 def ask_question(
     question: str,
     n_results: int = 5,
     persona: str | None = None,
     conversation_history: list[ConversationTurn] | None = None,
 ) -> dict:
-    chunks = search_judgments(question, n_results=n_results)
+    retrieval_query = _build_retrieval_query(question, conversation_history)
+    chunks = search_judgments(retrieval_query, n_results=n_results)
 
     if not chunks:
         return {

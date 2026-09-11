@@ -48,21 +48,20 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 - [x] Login endpoint (`POST /auth/login`, JWT issuance) — verified: 200 + correct role on success, 401 on wrong password
 - [x] Frontend login/signup pages — auth flow, role-gated nav, dashboard cards, and page-level access all verified working across all 4 roles
 - [x] Role-gated backend routes — /search, /documents/upload, /documents/summarize-uploaded, /judgments/{case_name}/summary restricted to lawyer+judge; verified via test script (judge 200, student 403, no token 401) (FastAPI dependency checks role from JWT)
-- [ ] Sidebar/nav renders different tools per role
+- [x] Sidebar/nav renders different tools per role — verified during login/signup testing (Search/Upload hidden for student/public)
 - [x] **Judge**: side-by-side case comparison view (parallel summaries of 2–3 picked judgments) — `POST /judgments/compare`, judge-only, verified end-to-end (2 and 3 case selection, back-navigation clears state, hidden entirely for other roles)
 - [x] **Lawyer**: "case file" export — star judgments → export citations/snippets/summaries as PDF/DOCX — `POST /documents/export-case-file`, lawyer+judge, verified (docx opens correctly, content matches selection, independent selection state from judge Compare)
-- [ ] **Student**: conversational/tutor QA mode, no raw multi-result search UI
+- [x] **Student**: conversational/tutor QA mode — multi-turn chat (frontend-held history, capped to last 5 exchanges sent to Gemini), "why this matters" section, follow-up chips, citations/verification badge stay visible. Fix applied: retrieval query now anchors to the previous question's text for vague follow-ups (e.g. "can you give an example?"), since raw follow-up text alone often lacks matchable legal vocabulary. Verified: multi-turn context works, topic-switch mid-conversation handled correctly, clear-conversation resets cleanly.
 - [ ] **Public**: simplified QA + mapping only, no raw search, no document upload
 - [x] Fix: Compare/Export button alignment on result cards (inconsistent position across differing case-name lengths)
 - [x] Fix: Compare bar + Export bar must both be visible simultaneously (fixed positioning, stacked)
 
 ### Judge/Lawyer feature differentiation (Compare vs. Export originally showed near-identical content)
 - [x] Judge: Sentencing pattern insight on Comparison page (aggregate stats from existing ipc302_themes.json labeling — no new Gemini calls) — verified: shared-theme highlighting correct across themed/untagged/out-of-scope case combinations; panel correctly hidden when no selected case is in the themed set
-- [ ] Judge: Citation-ready order excerpt (formats comparison output as citable paragraph; explicitly does not draft reasoning/outcome — judge remains decision-maker) — built, verification pending (blocked by Gemini free-tier daily quota during testing session)
+- [x] Judge: Citation-ready order excerpt (formats comparison output as citable paragraph; explicitly does not draft reasoning/outcome — judge remains decision-maker) — `POST /judgments/citation-excerpt`, judge-only, verified: correctly names both cases and cites specific legal principles without drafting a finding/outcome for a new matter; copy-to-clipboard confirmed working
 - [x] Lawyer: Counter-argument finder (reframed adversarial retrieval query over existing corpus — surfaces precedent the opposing side may cite) — `POST /documents/counter-arguments`, lawyer+judge, verified: on-point counter-queries generated per case, no duplicate case names in results, dedup fix applied
 - [x] Lawyer: Client-ready plain-language summary (reuses the plain-language prompt style planned for the Public persona) — `POST /documents/client-summary`, lawyer+judge, verified: jargon-free, no case names/citations, inline accordion expand/collapse, cached on repeat clicks
 - [x] Fix: Search page query/results now persist in App.jsx state (previously lost on navigating to Compare/Export/Counter-arguments and back)
-- [ ] Lawyer: Client-ready plain-language summary (reuses the plain-language prompt style planned for the Public persona)
 - [x] Fix: Gemini API calls now retry once on transient failure (e.g. 503) before returning a clean user-facing error instead of a raw 500
 
 ### Stage 3 — True RBAC (documented as future work only, not building)
