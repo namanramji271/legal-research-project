@@ -30,7 +30,7 @@ if not GEMINI_API_KEY:
 
 # If this model name errors out, run list_models() (see bottom of file)
 # to see what's currently available on your account/tier and swap it in.
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.6-flash"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 router = APIRouter()
@@ -144,6 +144,7 @@ def _call_gemini_with_retry(prompt: str):
         try:
             return client.models.generate_content(model=MODEL_NAME, contents=prompt)
         except Exception as error:
+            print(f"DEBUG /ask error (attempt {attempt}): {type(error).__name__}: {error}")
             last_error = error
             time.sleep(2)
     raise HTTPException(
