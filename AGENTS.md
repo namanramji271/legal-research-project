@@ -11,10 +11,24 @@ citation-backed QA with a citation verification safeguard.
 - Vector DB: ChromaDB
 - Embeddings: all-MiniLM-L6-v2 (chosen for speed without GPU; BGE-M3
   comparison planned for later evaluation phase, not this week)
-- LLM: Gemini API (google-genai SDK, model: gemini-2.5-flash). Free-tier
-  quota observed in practice: 5 requests/minute, 20 requests/day — any
-  evaluation script calling ask_question() repeatedly must pace requests
-  (15-30s delay) and expect to span multiple days for larger test sets.
+- LLM: Gemini API (google-genai SDK). MODEL_NAME was gemini-2.5-flash,
+  changed to gemini-3.6-flash in both qa.py and documents.py after
+  discovering gemini-2.5-flash returns 404 ("no longer available to new
+  users") on newly-created Google Cloud projects - an early sign of its
+  scheduled Oct 16 2026 deprecation. MODEL_NAME is duplicated in both
+  files (not shared from a single constant) - if changed again, update
+  both.
+  Free-tier quota observed in practice: 5 requests/minute, 20 requests/day
+  per Google Cloud project - any evaluation script calling ask_question()
+  repeatedly must pace requests (15-30s delay) and expect to span multiple
+  days for larger test sets. Attempted upgrade to Gemini's pay-as-you-go
+  billing twice; both attempts were blocked by Google's fraud-detection
+  system during UPI-autopay signup (no charge occurred either time,
+  mandate was cancelled after each attempt) - project currently remains
+  on the free tier. Workaround for heavier testing days: create a second
+  Google Cloud project + API key for an independent 20/day quota pool
+  (confirmed each project's quota is genuinely independent, but note the
+  new-user model-availability issue above applies per-project too).
 - Data: judgment corpus filtered from ILDC/NyayaAnumana for
   murder/culpable homicide/private defence (IPC 299-304, 96-106)
 
@@ -601,7 +615,7 @@ Scoped to SearchPage.jsx only, per design — QuestionPage.jsx uses a
 different data shape (QA answer + sources, not a ranked result list) and
 was intentionally left out of this feature's scope.
 
-## Authentication & Role-Based Access — Stage 2 in progress
+## Authentication & Role-Based Access — Stage 2 complete
 Context: see "Future work" section below for the full staged plan. Stage 1
 (frontend-only persona toggle) was skipped; went straight to Stage 2 based
 on a clearer articulation of the actual goal — role-gated features per
@@ -609,103 +623,174 @@ persona, not just prompt/UI framing. Role is self-declared at signup, NOT
 identity-verified — this is role-based PERSONALIZATION enforced at the API
 layer, not a security boundary against someone falsely claiming a
 professional identity. State this explicitly in the paper if this feature
-is described there.
+is described there. All items below are built and verified.
 
-- backend/auth.py: new standalone module. users table (id, username,
-  password_hash, role, created_at) in a dedicated SQLite file
-  (backend/data/users.db), kept fully separate from mapping.db (which is a
-  generated artifact rebuilt from ipc_bns_mapping.csv on startup). Only
-  CREATE TABLE IF NOT EXISTS is used — users.db must never be
-  regenerated/dropped, unlike mapping.db.
-  - Password hashing: bcrypt directly (NOT passlib — passlib's bcrypt
-    backend-detection is broken on newer bcrypt/Python versions, causing a
-    "password cannot be longer than 72 bytes" error during passlib's own
-    internal self-test, unrelated to actual password length. Fixed by
-    calling bcrypt.hashpw()/bcrypt.checkpw() directly instead).
+- backend/auth.py: users table (id, username, password_hash, role,
+  created_at) in a dedicated SQLite file (backend/data/users.db), kept
+  fully separate from mapping.db. Only CREATE TABLE IF NOT EXISTS is used
+  - users.db must never be regenerated/dropped.
+  - Password hashing: bcrypt directly (NOT passlib - passlib's bcrypt
+    backend-detection is broken on newer bcrypt/Python versions).
   - JWT via python-jose, HS256, 24h expiry, secret from JWT_SECRET_KEY in
-    .env (same pattern as GEMINI_API_KEY). No refresh-token flow, no email
-    verification, no password reset — deliberately out of scope.
+    .env. No refresh-token flow, no email verification, no password reset.
   - POST /auth/signup and POST /auth/login, both return
     {access_token, token_type, username, role}.
   - require_role(*roles) dependency factory for gating other routers.
   - Roles: lawyer, judge, student, public.
-  - Verified via test script: all 4 roles signup (201), login returns
-    correct role (200), wrong password (401), duplicate username (400).
-- Role-gated backend routes (require_role("lawyer", "judge")): GET /search
-  (search.py), POST /documents/upload, POST /documents/summarize-uploaded,
-  GET /judgments/{case_name}/summary (all in documents.py). POST /ask and
-  all /mapping/* routes remain open to all roles.
-  Verified via test script: judge -> 200, student -> 403, no token -> 401.
-- Frontend: frontend/src/api.js exports authFetch() (wraps fetch(), attaches
-  Authorization: Bearer <token> from localStorage key "auth" if present).
-  New LoginPage.jsx and SignupPage.jsx (role dropdown: Lawyer/Judge/
-  Student/Public). App.jsx blocks all tool pages until auth exists in
-  localStorage; renders LoginPage/SignupPage otherwise. Sidebar.jsx hides
-  Search/Document Upload nav links for student/public roles and shows
-  username/role/logout in a footer.
-  - Route-level enforcement (not just nav-link hiding): App.jsx also
-    blocks direct navigation to search/upload pages for student/public
-    roles, and Dashboard's feature cards for those two tools are
-    hidden/disabled for student/public — closes a bypass where the nav
-    link was hidden but the page was still reachable via dashboard cards.
-  - Collapsed sidebar shows icon-only avatar/logout, matching the existing
-    collapsed nav-link treatment.
-  - SearchPage.jsx and the three gated DocumentUploadPage.jsx calls use
-    authFetch() instead of fetch(); QuestionPage.jsx and MappingLookup.jsx
-    are untouched (their routes aren't gated).
-  Verified end-to-end in-browser across all 4 roles: signup, login/logout,
-  nav gating, dashboard-card gating, and direct search access all correct.
-- Judge comparison view: complete. POST /judgments/compare (judge-only,
-  2-3 case_names), reuses summarize_legal_text() per case, returns
-  {results: [{case_name, court, year, ipc_sections, summary}]}.
-  Frontend: ComparisonPage.jsx, judge-only "Compare" toggle on
-  SearchPage.jsx result cards (capped at 3), sticky action bar pattern.
-  Verified end-to-end across judge/lawyer roles.
-- Lawyer case-file export: complete. POST /documents/export-case-file
-  (lawyer+judge, 1+ case_names), generates a .docx via python-docx
-  (case headings, metadata, four-section AI summary per case, page
-  breaks between cases), returned as a StreamingResponse download.
-  Frontend: separate "Add to case file" toggle (independent selection
-  state from judge's Compare toggle, no cap), sticky export bar,
-  blob-based file download on click. Verified end-to-end (docx opens
-  correctly, content matches selected cases, judges see both toggles
-  distinctly, lawyers see only the export toggle).
-  FIX: both toggle buttons' alignment on result cards was inconsistent
-  across differing case-name lengths (wrapped inline with the title in
-  some cases) - fixed to a consistent flex row layout. FIX: Compare bar
-  and Export bar could stack in normal document flow when a judge had
-  both active, forcing a scroll to see the second bar - fixed to both
-  render as position: fixed, stacked directly above one another, always
-  simultaneously visible when both have selections.
-- DESIGN NOTE (identified during review, not yet addressed): Compare and
-  Export currently surface near-identical content (the same per-case AI
-  summary), just reshaped for side-by-side viewing vs. a downloadable
-  doc - flagged as insufficiently differentiated for the two personas'
-  actual real-world needs. Four follow-up features planned to properly
-  differentiate them - see project_status_checklist.md, "Judge/Lawyer
-  feature differentiation" section, for the full list and reasoning
-  (sentencing pattern insight, citation-ready order excerpt, and
-  counter-argument finder, client-ready plain-language summary).
+- Role-gated backend routes (require_role("lawyer", "judge")): GET /search,
+  POST /documents/upload, POST /documents/summarize-uploaded,
+  GET /judgments/{case_name}/summary. POST /ask and all /mapping/* routes
+  remain open to all roles.
+- Frontend: frontend/src/api.js exports authFetch(). LoginPage.jsx and
+  SignupPage.jsx (role dropdown). App.jsx blocks all tool pages until auth
+  exists in localStorage. Sidebar.jsx hides Search/Document Upload nav
+  links for student/public and shows username/role/logout in a footer.
+  Route-level enforcement (not just nav-link hiding) - App.jsx blocks
+  direct navigation and Dashboard's feature cards are hidden/disabled for
+  student/public on those two tools. Collapsed sidebar shows icon-only
+  avatar/logout.
 
-NOT YET BUILT (next): the four persona-specific features this gating
-exists to support — judge side-by-side case comparison, lawyer case-file
-export (star judgments -> PDF/DOCX), student conversational/tutor QA mode,
-public simplified QA (no raw citations). See project_status_checklist.md
-for the up-to-date tracker.
+### Judge features (all complete)
+- Comparison view: POST /judgments/compare (judge-only, 2-3 case_names),
+  reuses summarize_legal_text() per case. Frontend: ComparisonPage.jsx,
+  judge-only "Compare" toggle on SearchPage.jsx (capped at 3).
+- Sentencing pattern insight: POST /judgments/theme-stats (judge-only),
+  pure aggregation over backend/eval/ipc302_themes.json - zero Gemini
+  calls. Returns is_relevant flag (true only if at least one selected
+  case is in the labeled IPC 302 theme set), aggregate theme counts across
+  the labeled corpus, and per-selected-case theme membership. Frontend
+  panel on ComparisonPage.jsx highlights themes shared by 2+ selected
+  cases; hidden entirely when is_relevant is false. Presented as
+  descriptive counts only (no "prediction"/"statistics" language) given
+  the current 48-judgment corpus size - see corpus expansion note below.
+- Citation-ready order excerpt: POST /judgments/citation-excerpt
+  (judge-only), one additional Gemini call synthesizes already-summarized
+  compared cases into a single citable paragraph in Indian judicial-order
+  style. Explicitly instructed (and verified) to only cite/summarize what
+  the cases held - never drafts a finding, reasoning, or outcome for a new
+  matter; the judge remains the decision-maker. Frontend: button on
+  ComparisonPage.jsx, copy-to-clipboard.
+
+### Lawyer features (all complete)
+- Case-file export: POST /documents/export-case-file (lawyer+judge,
+  1+ case_names), generates a .docx via python-docx (case headings,
+  metadata, four-section AI summary per case, page breaks between cases),
+  returned as a StreamingResponse download. Frontend: separate "Add to
+  case file" toggle (independent selection state from judge's Compare
+  toggle, no cap), sticky export bar, blob-based file download.
+- Counter-argument finder: POST /documents/counter-arguments
+  (lawyer+judge). For each selected case, one Gemini call generates a
+  short adversarial search query (framed to find precedent that argues
+  against/distinguishes that case's holding), then that query runs
+  through the existing search_judgments() unchanged - no new retrieval
+  infrastructure. Dedupes candidate results to unique case names
+  (first-occurrence order) and excludes the originally-selected cases.
+  Frontend: "Find counter-arguments" button in the case-file sticky bar,
+  new CounterArgumentsPage.jsx shows each case's counter_query (shown to
+  the user for transparency) plus up to 5 counter-case results.
+- Client-ready plain-language summary: POST /documents/client-summary
+  (lawyer+judge, ONE case_name at a time - not a batch operation, since
+  explaining a case to a client is naturally one-case-at-a-time). Prompt
+  forbids legal jargon, case names, and section numbers in the output.
+  Frontend: inline accordion-style "Client summary" button on each
+  SearchPage.jsx result card, cached per-card after first load.
+
+### Student feature (complete)
+- Tutor mode: /ask gains optional persona and conversation_history fields
+  (see qa.py changes below). True multi-turn conversation, but history is
+  held in frontend state only (not persisted to any DB - clears on
+  refresh/logout). Capped to the last 5 exchanges actually forwarded to
+  Gemini (older turns stay visible in the UI thread but aren't resent) to
+  bound prompt size/cost on long study sessions. Frontend: QuestionPage.jsx
+  renders a chat-bubble thread for student role only; citations and the
+  verified/unverified badge stay visible (student persona does NOT hide
+  citations, unlike public); each answer gets a "Why this matters:"
+  section appended by the backend prompt; static/hardcoded follow-up
+  question chips (no extra Gemini cost); "Clear conversation" button
+  resets thread + history state.
+  FIX: retrieval (search_judgments()) originally only ever searched the
+  raw current question text, with no awareness of conversation history -
+  vague follow-ups like "can you give an example?" had no matchable legal
+  vocabulary and correctly-but-unhelpfully returned "no relevant judgments
+  found". Fixed via _build_retrieval_query() in qa.py, which anchors
+  retrieval to the previous turn's question text concatenated with the
+  new question - this only changes what's searched, not what's shown to
+  the user or sent to Gemini as "the question".
+
+### Public feature (complete)
+- Simplified QA: same /ask endpoint with persona="public". Prompt
+  instructs plain English, no jargon, no case names/section numbers in
+  the answer text. Backend still computes sources_used/verified/
+  unverified_citations as normal (citation verifier is completely
+  unaffected by persona) - only the frontend suppresses rendering these
+  fields for this role. Frontend: persistent, non-dismissible disclaimer
+  banner ("not legal advice, consult a lawyer") always visible at the top
+  of QuestionPage.jsx for this role; one-shot layout (no chat thread -
+  that's student-only).
+
+### qa.py changes (supporting student + public personas)
+- AskRequest gained persona: str | None and
+  conversation_history: list[ConversationTurn] (each turn:
+  {question, answer}).
+- PERSONA_INSTRUCTIONS dict holds the two prompt-injection blocks
+  (student's "why this matters" instruction, public's plain-language
+  instruction) - lawyer/judge/None get no injection, unchanged behavior.
+- build_prompt() now also accepts persona and conversation_history,
+  appending a capped (MAX_HISTORY_TURNS = 5) history block to the prompt
+  when present.
+- _call_gemini_with_retry() added: retries once on any exception (2s
+  delay) before raising a clean HTTPException(503, ...) instead of
+  propagating a raw error - qa.py previously had NO error handling around
+  its Gemini call at all; documents.py's summarize_legal_text() already
+  had this pattern, qa.py now matches it.
+
+### Cross-cutting fixes made during this work
+- FIX: Compare/Export toggle button alignment on SearchPage.jsx result
+  cards was inconsistent across differing case-name lengths (wrapped
+  inline with the title in some cases) - fixed to a consistent flex row
+  layout, separate from the case title.
+- FIX: Compare bar and case-file Export bar could stack in normal
+  document flow when a judge had both active simultaneously, forcing a
+  scroll to see the second bar - fixed to both render as position: fixed,
+  stacked directly above one another, always simultaneously visible.
+- FIX: SearchPage's query text and results array were owned by local
+  component state, so navigating away (Compare/Export/Counter-arguments
+  pages) and back lost the previous search entirely - lifted this state
+  up to App.jsx, passed down as props, so it now persists across
+  navigation.
+- FIX (documents.py): summarize_legal_text()'s Gemini call previously had
+  no error handling at all - now retries once (2s delay) before raising a
+  clean HTTPException(503, ...) instead of an unhandled 500. The same
+  retry pattern was then also added fresh to qa.py's Gemini call (see
+  above), which had never had any error handling.
+- DESIGN NOTE (now resolved): Compare and Export originally surfaced
+  near-identical content (the same per-case AI summary, just reshaped) -
+  flagged as insufficiently differentiated for judges' and lawyers'
+  actual real-world needs. The four features above (sentencing insight +
+  citation excerpt for judges; counter-argument finder + client summary
+  for lawyers) were built specifically to resolve this and give each role
+  genuinely distinct capabilities, not just a different display of the
+  same output.
 
 ## Future work (not yet built, documented for later)
-Persona-aware legal research platform, staged plan (updated — see
-"Authentication & Role-Based Access" section above for what's actually
-built): Stage 1 (frontend-only persona toggle, no accounts) was skipped.
-Stage 2 (accounts + role-gated features, self-declared role) is in
-progress — auth and route gating are done; the four persona-specific
-features (judge comparison view, lawyer case-file export, student tutor
-mode, public simplified QA) are not yet built. Stage 3 (true
+Persona-aware legal research platform, staged plan (see "Authentication &
+Role-Based Access" section above for everything actually built - Stage 2
+is now complete in full, including all four judge/lawyer differentiation
+features and both student/public personas). Stage 3 (true
 identity-verified RBAC) remains deliberately out of scope — no credential
 verification pipeline (e.g. against Bar Council enrollment or judicial ID
 systems) is planned; role stays self-declared/personalization-only
 forever. Document Stage 3's absence explicitly as a scoping decision in
 the paper, not an oversight.
+
+Corpus expansion: currently 48 judgments; targeting 100+ via a law-student
+contact's access to additional case files (in progress, external
+dependency, not yet started as of this writing). Motivated by two
+existing findings: the IPC 304 retrieval weakness in the original
+evaluation (see Evaluation section above), and the sentencing-pattern-
+insight feature's descriptive-only framing (48 judgments is explicitly
+too small to present theme counts as statistically meaningful - re-run
+retrieval evaluation and revisit that framing once the corpus grows).
 
 Other deferred ideas (not yet scoped into a stage): voice assistant
 (speech-to-text/text-to-speech, likely browser-native APIs to avoid
@@ -761,3 +846,9 @@ prevents it from being accidentally re-added.
 - users.db (backend/data/users.db) follows the same rule as chroma_db/ and
   judgments.jsonl: gitignored, never committed, never assumed to exist on
   a fresh clone.
+- MODEL_NAME ("gemini-3.6-flash" as of this writing) is duplicated as a
+  module-level constant in both qa.py and documents.py, not shared from
+  one place - if Gemini deprecates the current model again, update both
+  files. Any new Gemini call added elsewhere should follow the same
+  retry-once-then-clean-503 error pattern used in both files, not a bare
+  call.

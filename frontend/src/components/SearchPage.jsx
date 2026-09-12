@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import LoadingSpinner, { ResultSkeletonList } from "./LoadingSpinner.jsx";
 import { authFetch } from "../api";
+import {
+  isSpeechSynthesisSupported,
+  speakText,
+  stopSpeaking,
+} from "../utils/speech.js";
 
 const API_BASE = "http://localhost:8000";
 const SEARCH_RESULT_LIMIT = 15;
@@ -126,11 +131,34 @@ export default function SearchPage({
   const [caseFileCases, setCaseFileCases] = useState([]);
   const [exporting, setExporting] = useState(false);
   const [clientSummaries, setClientSummaries] = useState({}); // { [case_name]: { loading, error, summary, expanded } }
+  const [activeSpeakingCase, setActiveSpeakingCase] = useState(null);
 
   const isJudge = auth?.role === "judge";
   const canExport = auth?.role === "lawyer" || auth?.role === "judge";
   const canViewClientSummary = auth?.role === "lawyer" || auth?.role === "judge";
   const MAX_COMPARE = 3;
+
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, []);
+
+  function handleTogglePlayClientSummary(caseName, summaryText) {
+    if (!isSpeechSynthesisSupported()) return;
+
+    if (activeSpeakingCase === caseName) {
+      stopSpeaking();
+      setActiveSpeakingCase(null);
+    } else {
+      setActiveSpeakingCase(caseName);
+      speakText(
+        summaryText,
+        () => setActiveSpeakingCase(caseName),
+        () => setActiveSpeakingCase(null)
+      );
+    }
+  }
 
   async function toggleClientSummary(caseName) {
     const current = clientSummaries[caseName];
@@ -528,6 +556,46 @@ export default function SearchPage({
                   <div className="client-summary-panel" role="region" aria-label="Client summary">
                     <div className="client-summary-header">
                       <span className="client-summary-badge">Client summary</span>
+
+                      {/* Voice output for lawyer to play summary out loud during client consultation */}
+                      {isSpeechSynthesisSupported() && clientSummaries[result.case_name]?.summary && (
+                        <button
+                          type="button"
+                          className={`qa-speak-button client-summary-speak-button${
+                            activeSpeakingCase === result.case_name ? " qa-speak-button-active" : ""
+                          }`}
+                          onClick={() =>
+                            handleTogglePlayClientSummary(
+                              result.case_name,
+                              clientSummaries[result.case_name].summary
+                            )
+                          }
+                          title={
+                            activeSpeakingCase === result.case_name
+                              ? "Stop audio playback"
+                              : "Play plain-language summary out loud for client"
+                          }
+                          aria-label={
+                            activeSpeakingCase === result.case_name
+                              ? "Stop audio playback"
+                              : "Play plain-language summary out loud for client"
+                          }
+                        >
+                          {activeSpeakingCase === result.case_name ? (
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                              <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                              <path d="M11 5L6 9H2v6h4l5 4V5z" strokeLinejoin="round" />
+                              <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" strokeLinecap="round" />
+                            </svg>
+                          )}
+                          <span>
+                            {activeSpeakingCase === result.case_name ? "Stop" : "Play for client"}
+                          </span>
+                        </button>
+                      )}
                     </div>
 
                     {clientSummaries[result.case_name]?.loading && (

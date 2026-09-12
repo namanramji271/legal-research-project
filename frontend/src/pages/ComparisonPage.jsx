@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import LoadingSpinner from "../components/LoadingSpinner.jsx";
 import { API_BASE, authFetch } from "../api";
+import {
+  isSpeechSynthesisSupported,
+  speakText,
+  stopSpeaking,
+} from "../utils/speech.js";
 
 /**
  * Re-uses DocumentUploadPage's SummaryBody logic for rendering
@@ -134,6 +139,29 @@ export default function ComparisonPage({ caseNames, onBack }) {
   const [excerptError, setExcerptError] = useState("");
   const [excerpt, setExcerpt] = useState("");
   const [copied, setCopied] = useState(false);
+  const [activeSpeakingCase, setActiveSpeakingCase] = useState(null);
+
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, []);
+
+  function handleToggleListenSummary(caseName, summaryText) {
+    if (!isSpeechSynthesisSupported()) return;
+
+    if (activeSpeakingCase === caseName) {
+      stopSpeaking();
+      setActiveSpeakingCase(null);
+    } else {
+      setActiveSpeakingCase(caseName);
+      speakText(
+        summaryText,
+        () => setActiveSpeakingCase(caseName),
+        () => setActiveSpeakingCase(null)
+      );
+    }
+  }
 
   async function handleGenerateExcerpt() {
     setExcerptLoading(true);
@@ -362,7 +390,44 @@ export default function ComparisonPage({ caseNames, onBack }) {
               >
                 {/* Column header */}
                 <header className="comparison-column-header">
-                  <h2 className="comparison-case-name">{item.case_name}</h2>
+                  <div className="comparison-column-title-row">
+                    <h2 className="comparison-case-name">{item.case_name}</h2>
+                    {isSpeechSynthesisSupported() && item.summary && (
+                      <button
+                        type="button"
+                        className={`qa-speak-button comparison-speak-button${
+                          activeSpeakingCase === item.case_name ? " qa-speak-button-active" : ""
+                        }`}
+                        onClick={() =>
+                          handleToggleListenSummary(item.case_name, item.summary)
+                        }
+                        title={
+                          activeSpeakingCase === item.case_name
+                            ? "Stop listening"
+                            : "Listen to case summary while reviewing"
+                        }
+                        aria-label={
+                          activeSpeakingCase === item.case_name
+                            ? "Stop listening"
+                            : "Listen to case summary while reviewing"
+                        }
+                      >
+                        {activeSpeakingCase === item.case_name ? (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                            <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                            <path d="M11 5L6 9H2v6h4l5 4V5z" strokeLinejoin="round" />
+                            <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        <span>
+                          {activeSpeakingCase === item.case_name ? "Stop" : "Listen while reviewing"}
+                        </span>
+                      </button>
+                    )}
+                  </div>
                   <p className="search-meta">
                     {item.court}
                     {item.year ? ` · ${item.year}` : ""}

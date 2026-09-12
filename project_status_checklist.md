@@ -74,11 +74,12 @@ How to use: check off `[ ]` → `[x]` as items are completed. Keep this in sync 
 
 ## Part 4 — New Feature Ideas (proposed this session)
 
-### Voice Assistant (speech-to-text + text-to-speech)
-- [ ] Decide input scope: QA page only, or QA + Search
-- [ ] Speech-to-text: browser Web Speech API (free, no Gemini quota cost) vs. a hosted STT API
-- [ ] Text-to-speech: browser SpeechSynthesis API (free) for reading answers aloud
-- [ ] Accessibility framing for the paper: lowers barrier to entry for Public/Student personas especially — good narrative fit alongside persona work
+### Voice Assistant (speech-to-text + text-to-speech) — complete
+- [x] Voice input (mic button) on QuestionPage.jsx, all 4 personas — browser Web Speech API (SpeechRecognition), free, no Gemini cost. Populates question input, does NOT auto-submit. Feature-detected with disabled+tooltip fallback for unsupported browsers (Firefox/Safari — Firefox untested, not available). Public persona gets more prominent mic styling/labeling ("Ask by voice"). Verified: works correctly, and permission-denied case now shows a clear inline message with reload instructions instead of failing silently.
+- [x] Voice output (read-aloud) on every QuestionPage.jsx answer, all 4 personas — browser SpeechSynthesis API, free. Cancels/restarts if a different answer is played mid-speech (no overlapping audio). Verified working.
+- [x] Voice output on Lawyer's "Client summary" card (SearchPage.jsx) — labeled "Play for client." Verified working.
+- [x] Voice output on Judge's Comparison page — labeled "Listen while reviewing." Verified working.
+- [ ] FLAGGED FOR FUTURE WORK, NOT BUILDING NOW: regional language support (speak in Hindi/Tamil/etc., Gemini answers in that language, spoken back). Would be the strongest extension of Public's accessibility story — English-only voice still excludes much of the population the platform's own access-to-justice framing targets. Explicitly deferred because: (1) requires backend prompt changes to answer in the target language, (2) browser TTS voice availability for Indian languages is inconsistent across devices/OS (decent on some Android phones, often missing on desktop browsers). Write this up as an honest, well-reasoned limitation in the paper's future-work section, not a hidden gap.
 
 ### Image Upload
 - [ ] Decide scope: scanned judgment images, lawyer evidence photos, or both

@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import LoadingSpinner, { ResultSkeletonList } from "./LoadingSpinner.jsx";
 import { API_BASE, authFetch } from "../api";
+import {
+  createSpeechRecognition,
+  isSpeechRecognitionSupported,
+  isSpeechSynthesisSupported,
+  speakText,
+  stopSpeaking,
+} from "../utils/speech.js";
 
 function VerifiedIcon() {
   return (
@@ -18,6 +25,31 @@ function WarningIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+      <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SpeakerIcon({ isSpeaking }) {
+  if (isSpeaking) {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+        <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M11 5L6 9H2v6h4l5 4V5z" strokeLinejoin="round" />
+      <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" strokeLinecap="round" />
     </svg>
   );
 }
@@ -58,7 +90,116 @@ export default function QuestionPage({ auth }) {
   const [studentLoading, setStudentLoading] = useState(false);
   const [studentError, setStudentError] = useState("");
 
+  // Voice Input (SpeechRecognition) state
+  const speechSupported = isSpeechRecognitionSupported();
+  const [isListening, setIsListening] = useState(false);
+  const [voiceTarget, setVoiceTarget] = useState(null); // 'single' or 'student'
+  const [voiceError, setVoiceError] = useState("");
+  const activeRecognitionRef = useRef(null);
+
+  // Voice Output (SpeechSynthesis) state
+  const [activeSpeakingId, setActiveSpeakingId] = useState(null);
+
   const chatBottomRef = useRef(null);
+
+  // Cleanup speech synthesis and recognition on unmount
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+      if (activeRecognitionRef.current) {
+        try {
+          activeRecognitionRef.current.abort();
+        } catch {}
+      }
+    };
+  }, []);
+
+  function handleToggleReadAloud(id, text) {
+    if (!isSpeechSynthesisSupported()) return;
+
+    if (activeSpeakingId === id) {
+      stopSpeaking();
+      setActiveSpeakingId(null);
+    } else {
+      setActiveSpeakingId(id);
+      speakText(
+        text,
+        () => setActiveSpeakingId(id),
+        () => setActiveSpeakingId(null)
+      );
+    }
+  }
+
+  function handleStartVoiceInput(targetMode) {
+    if (!speechSupported) return;
+
+    setVoiceError("");
+
+    if (isListening) {
+      if (activeRecognitionRef.current) {
+        try {
+          activeRecognitionRef.current.stop();
+        } catch {}
+      }
+      setIsListening(false);
+      setVoiceTarget(null);
+      return;
+    }
+
+    const recognition = createSpeechRecognition();
+    if (!recognition) return;
+
+    activeRecognitionRef.current = recognition;
+    setIsListening(true);
+    setVoiceTarget(targetMode);
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((r) => r[0]?.transcript || "")
+        .join(" ")
+        .trim();
+
+      if (transcript) {
+        if (targetMode === "student") {
+          setStudentInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        } else {
+          setQuestion((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        }
+      }
+    };
+
+    recognition.onerror = (event) => {
+      // Ensure listening state is immediately cleared so button does not stay stuck
+      setIsListening(false);
+      activeRecognitionRef.current = null;
+
+      const err = event.error || "";
+      if (err === "not-allowed" || err === "permission-denied" || err === "service-not-allowed") {
+        setVoiceError(
+          "Microphone access is blocked. Enable it in your browser's site settings (click the lock icon in the address bar), then reload the page."
+        );
+      } else if (err === "no-speech") {
+        setVoiceError("No speech was detected. Please try again.");
+      } else if (err === "network") {
+        setVoiceError("Network error occurred during speech recognition. Please check your connection and try again.");
+      } else if (err !== "aborted") {
+        setVoiceError("Voice input didn't work, please try again.");
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      activeRecognitionRef.current = null;
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      setIsListening(false);
+      activeRecognitionRef.current = null;
+      setVoiceError("Voice input didn't work, please try again.");
+    }
+  }
 
   useEffect(() => {
     if (isStudent && conversationHistory.length > 0) {
@@ -242,7 +383,21 @@ export default function QuestionPage({ auth }) {
 
                 {/* AI Answer Bubble */}
                 <div className="qa-chat-bubble qa-chat-bubble-assistant">
-                  <div className="qa-chat-bubble-label">Legal Assistant</div>
+                  <div className="qa-chat-bubble-header">
+                    <div className="qa-chat-bubble-label">Legal Assistant</div>
+                    {isSpeechSynthesisSupported() && (
+                      <button
+                        type="button"
+                        className={`qa-speak-button${activeSpeakingId === `student-${idx}` ? " qa-speak-button-active" : ""}`}
+                        onClick={() => handleToggleReadAloud(`student-${idx}`, turn.answer)}
+                        title={activeSpeakingId === `student-${idx}` ? "Stop speaking" : "Read aloud"}
+                        aria-label={activeSpeakingId === `student-${idx}` ? "Stop speaking" : "Read aloud"}
+                      >
+                        <SpeakerIcon isSpeaking={activeSpeakingId === `student-${idx}`} />
+                        <span>{activeSpeakingId === `student-${idx}` ? "Stop" : "Read aloud"}</span>
+                      </button>
+                    )}
+                  </div>
 
                   {/* Verification Banner */}
                   {resp && (
@@ -349,7 +504,34 @@ export default function QuestionPage({ auth }) {
               }}
             />
             <div className="qa-student-form-footer">
-              <span className="qa-student-hint">Press Ctrl+Enter or click Send</span>
+              <div className="qa-student-footer-left">
+                <button
+                  type="button"
+                  className={`voice-mic-button${isListening && voiceTarget === "student" ? " voice-mic-button-listening" : ""}`}
+                  disabled={!speechSupported}
+                  onClick={() => handleStartVoiceInput("student")}
+                  title={
+                    !speechSupported
+                      ? "Voice input isn't supported in this browser - try Chrome or Edge."
+                      : isListening && voiceTarget === "student"
+                      ? "Listening... Click to stop"
+                      : "Speak your question"
+                  }
+                  aria-label={
+                    !speechSupported
+                      ? "Voice input isn't supported in this browser - try Chrome or Edge."
+                      : isListening && voiceTarget === "student"
+                      ? "Listening... Click to stop"
+                      : "Speak your question"
+                  }
+                >
+                  <MicIcon />
+                  {isListening && voiceTarget === "student" ? (
+                    <span className="voice-mic-pulse-text">Listening…</span>
+                  ) : null}
+                </button>
+                <span className="qa-student-hint">Press Ctrl+Enter or click Send</span>
+              </div>
               <button
                 className="lookup-button lookup-button-sm"
                 type="submit"
@@ -365,6 +547,9 @@ export default function QuestionPage({ auth }) {
                 )}
               </button>
             </div>
+            {voiceError && voiceTarget === "student" && (
+              <p className="voice-input-error">{voiceError}</p>
+            )}
           </div>
         </form>
       </section>
@@ -425,16 +610,60 @@ export default function QuestionPage({ auth }) {
             />
           </label>
 
-          <button className="lookup-button" type="submit" disabled={loading}>
-            {loading ? (
-              <>
-                <span className="button-spinner" aria-hidden="true" />
-                Preparing answer…
-              </>
-            ) : (
-              "Ask question"
-            )}
-          </button>
+          <div className="question-actions-row">
+            <button className="lookup-button" type="submit" disabled={loading}>
+              {loading ? (
+                <>
+                  <span className="button-spinner" aria-hidden="true" />
+                  Preparing answer…
+                </>
+              ) : (
+                "Ask question"
+              )}
+            </button>
+
+            {/* Voice input mic button with persona-specific prominence:
+                For the PUBLIC persona, voice input provides a major accessibility and usability win 
+                for citizens with lower typing proficiency or literacy barriers, so we provide a prominent 
+                button with an adjacent "Ask by voice" label. For lawyers/judges, a sleek, compact button is used. */}
+            <button
+              type="button"
+              className={`voice-mic-button${isPublic ? " voice-mic-button-public" : ""}${
+                isListening && voiceTarget === "single" ? " voice-mic-button-listening" : ""
+              }`}
+              disabled={!speechSupported}
+              onClick={() => handleStartVoiceInput("single")}
+              title={
+                !speechSupported
+                  ? "Voice input isn't supported in this browser - try Chrome or Edge."
+                  : isListening && voiceTarget === "single"
+                  ? "Listening... Click to stop"
+                  : isPublic
+                  ? "Ask by voice"
+                  : "Voice input"
+              }
+              aria-label={
+                !speechSupported
+                  ? "Voice input isn't supported in this browser - try Chrome or Edge."
+                  : isListening && voiceTarget === "single"
+                  ? "Listening... Click to stop"
+                  : isPublic
+                  ? "Ask by voice"
+                  : "Voice input"
+              }
+            >
+              <MicIcon />
+              {isListening && voiceTarget === "single" ? (
+                <span className="voice-mic-pulse-text">Listening…</span>
+              ) : isPublic ? (
+                <span className="voice-mic-label">Ask by voice</span>
+              ) : null}
+            </button>
+          </div>
+
+          {voiceError && voiceTarget === "single" && (
+            <p className="voice-input-error">{voiceError}</p>
+          )}
         </div>
 
         {!loading && !result && (
@@ -492,7 +721,21 @@ export default function QuestionPage({ auth }) {
           )}
 
           <section className="question-section">
-            <h2>Answer</h2>
+            <div className="question-answer-header">
+              <h2>Answer</h2>
+              {isSpeechSynthesisSupported() && (
+                <button
+                  type="button"
+                  className={`qa-speak-button${activeSpeakingId === "single-answer" ? " qa-speak-button-active" : ""}`}
+                  onClick={() => handleToggleReadAloud("single-answer", result.answer)}
+                  title={activeSpeakingId === "single-answer" ? "Stop speaking" : "Read aloud"}
+                  aria-label={activeSpeakingId === "single-answer" ? "Stop speaking" : "Read aloud"}
+                >
+                  <SpeakerIcon isSpeaking={activeSpeakingId === "single-answer"} />
+                  <span>{activeSpeakingId === "single-answer" ? "Stop" : "Read aloud"}</span>
+                </button>
+              )}
+            </div>
             <p className="question-answer">{result.answer}</p>
           </section>
 
