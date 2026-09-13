@@ -3,7 +3,7 @@ import LoadingSpinner, { ResultSkeletonList } from "./components/LoadingSpinner.
 import { authFetch } from "./api";
 
 const API_BASE = "http://localhost:8000";
-const ALLOWED_EXTENSIONS = [".pdf", ".txt"];
+const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".jpg", ".jpeg", ".png"];
 
 function isAllowedFile(file) {
   if (!file?.name) {
@@ -102,7 +102,7 @@ export default function DocumentUploadPage() {
     setCardSummaries(new Map());
 
     if (selected && !isAllowedFile(selected)) {
-      setError("Only .pdf and .txt files are supported.");
+      setError("Only .pdf, .txt, .jpg, .jpeg, and .png files are supported.");
       setFile(null);
       event.target.value = "";
     }
@@ -112,13 +112,13 @@ export default function DocumentUploadPage() {
     event.preventDefault();
 
     if (!file) {
-      setError("Choose a .pdf or .txt file to upload.");
+      setError("Choose a file (.pdf, .txt, .jpg, .jpeg, .png) to upload.");
       setResult(null);
       return;
     }
 
     if (!isAllowedFile(file)) {
-      setError("Only .pdf and .txt files are supported.");
+      setError("Only .pdf, .txt, .jpg, .jpeg, and .png files are supported.");
       setResult(null);
       return;
     }
@@ -214,6 +214,8 @@ export default function DocumentUploadPage() {
   }
 
   const relatedJudgments = result?.related_judgments || [];
+  const hasExtractedText =
+    result && result.extracted_text && result.extracted_text.trim().length >= 10;
 
   return (
     <section className="lookup-page">
@@ -226,11 +228,13 @@ export default function DocumentUploadPage() {
       <form className="lookup-form" onSubmit={handleUpload}>
         <div className="form-card document-controls">
           <label className="lookup-field lookup-field-grow">
-            <span className="lookup-label">Document (.pdf or .txt)</span>
+            <span className="lookup-label">
+              Upload a .pdf, .txt, or scanned/photographed image (.jpg, .png) file
+            </span>
             <input
               className="lookup-input document-file-input"
               type="file"
-              accept=".pdf,.txt"
+              accept=".pdf,.txt,.jpg,.jpeg,.png"
               onChange={handleFileChange}
             />
           </label>
@@ -250,6 +254,9 @@ export default function DocumentUploadPage() {
             )}
           </button>
         </div>
+        <p className="document-upload-note">
+          Image uploads work best with clear, printed or typed text (e.g. photographed petitions, FIRs, affidavits) - handwritten text may not extract reliably.
+        </p>
       </form>
 
       {loading && (
@@ -261,7 +268,14 @@ export default function DocumentUploadPage() {
 
       {error && <p className="lookup-message lookup-error">{error}</p>}
 
-      {!loading && result && (
+      {!loading && result && !hasExtractedText && (
+        <p className="lookup-message">
+          No readable text could be extracted from this file. If this was an
+          image, try a clearer photo with visible printed text.
+        </p>
+      )}
+
+      {!loading && result && hasExtractedText && (
         <article className="document-result">
           <p className="document-summary">
             <strong>{result.filename}</strong>

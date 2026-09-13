@@ -14,3 +14,5 @@ python-multipart
 bcrypt
 python-jose[cryptography]
 python-docx
+pytesseract
+pillow

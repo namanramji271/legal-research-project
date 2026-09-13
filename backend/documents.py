@@ -24,6 +24,10 @@ from search import search_judgments
 
 from docx import Document as DocxDocument
 from fastapi.responses import StreamingResponse
+from PIL import Image
+import pytesseract
+
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
 load_dotenv()
@@ -39,7 +43,7 @@ MODEL_NAME = "gemini-3.6-flash"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 router = APIRouter()
-SUPPORTED_SUFFIXES = {".pdf", ".txt"}
+SUPPORTED_SUFFIXES = {".pdf", ".txt", ".jpg", ".jpeg", ".png"}
 DATA_DIR = Path(__file__).resolve().parent / "data"
 JUDGMENTS_FILE = DATA_DIR / "judgments.jsonl"
 THEMES_FILE = Path(__file__).resolve().parent / "eval" / "ipc302_themes.json"
@@ -63,6 +67,22 @@ def _extract_text_file(file_bytes: bytes) -> str:
     except UnicodeDecodeError as error:
         raise HTTPException(
             status_code=400, detail="Plain-text files must use UTF-8 encoding"
+        ) from error
+
+
+def _extract_image_text(file_bytes: bytes) -> str:
+    """OCR text from an image held entirely in memory - never persisted 
+    to disk, consistent with the PDF/TXT extraction pattern. Scoped to 
+    printed/typed/scanned text (e.g. photographed FIRs, affidavits, 
+    petitions, judgments) - handwriting recognition is NOT reliable 
+    with Tesseract and is explicitly out of scope."""
+    try:
+        image = Image.open(BytesIO(file_bytes))
+        text = pytesseract.image_to_string(image)
+        return text
+    except Exception as error:
+        raise HTTPException(
+            status_code=400, detail="Unable to extract text from image"
         ) from error
 
 
@@ -301,6 +321,8 @@ async def upload_document(
 
     if suffix == ".pdf":
         extracted_text = _extract_pdf_text(file_bytes)
+    elif suffix in {".jpg", ".jpeg", ".png"}:
+        extracted_text = _extract_image_text(file_bytes)
     else:
         extracted_text = _extract_text_file(file_bytes)
     related_judgments = (

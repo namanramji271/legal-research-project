@@ -984,6 +984,13 @@
   align-items: end;
 }
 
+.document-upload-note {
+  margin-top: 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
 .document-file-input {
   padding: 0.4375rem 0.75rem;
   cursor: pointer;
