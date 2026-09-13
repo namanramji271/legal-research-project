@@ -54,6 +54,16 @@ function SpeakerIcon({ isSpeaking }) {
   );
 }
 
+function ImageUploadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <polyline points="21 15 16 10 5 21" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const QA_RESULT_LIMIT = 10;
 
 const EXAMPLE_QUESTIONS = [
@@ -101,6 +111,12 @@ export default function QuestionPage({ auth }) {
   const [activeSpeakingId, setActiveSpeakingId] = useState(null);
 
   const chatBottomRef = useRef(null);
+
+  // Image explain state (public standalone + student inline)
+  const [imageLoading, setImageLoading] = useState(false);
+  const [imageResult, setImageResult] = useState(null); // { filename, explanation, error }
+  const studentImageInputRef = useRef(null);
+  const publicImageInputRef = useRef(null);
 
   // Cleanup speech synthesis and recognition on unmount
   useEffect(() => {
@@ -312,6 +328,63 @@ export default function QuestionPage({ auth }) {
     setConversationHistory([]);
     setStudentInput("");
     setStudentError("");
+  }
+
+  // Shared image-explain handler used by both student and public personas
+  async function handleExplainImage(file, targetPersona) {
+    if (!file) return;
+    const suffix = file.name.toLowerCase().split(".").pop();
+    if (!["jpg", "jpeg", "png"].includes(suffix)) return;
+
+    if (targetPersona === "public") {
+      setImageLoading(true);
+      setImageResult(null);
+    } else if (targetPersona === "student") {
+      setStudentLoading(true);
+      setStudentError("");
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await authFetch(`${API_BASE}/documents/explain-image`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || `Upload failed (${response.status})`);
+      }
+      const data = await response.json();
+
+      if (targetPersona === "public") {
+        setImageResult(data);
+      } else if (targetPersona === "student") {
+        // Inject as a chat turn: user bubble = "[Uploaded image: filename]",
+        // AI bubble = explanation (or error text if present)
+        const answerText = data.error
+          ? data.error
+          : data.explanation || "No explanation was returned.";
+        setConversationHistory((prev) => [
+          ...prev,
+          {
+            question: `[Uploaded image: ${data.filename}]`,
+            answer: answerText,
+            responseData: null, // no citation/source metadata for this flow
+          },
+        ]);
+      }
+    } catch (err) {
+      if (targetPersona === "public") {
+        setImageResult({ error: err.message || "Something went wrong." });
+      } else if (targetPersona === "student") {
+        setStudentError(err.message || "Image upload failed. Please try again.");
+      }
+    } finally {
+      if (targetPersona === "public") setImageLoading(false);
+      if (targetPersona === "student") setStudentLoading(false);
+    }
   }
 
   /* -------------------------------------------------------------
@@ -530,6 +603,32 @@ export default function QuestionPage({ auth }) {
                     <span className="voice-mic-pulse-text">Listening…</span>
                   ) : null}
                 </button>
+
+                {/* Hidden file input for image explain */}
+                <input
+                  ref={studentImageInputRef}
+                  type="file"
+                  accept=".jpg,.jpeg,.png"
+                  className="sr-only-input"
+                  aria-hidden="true"
+                  tabIndex={-1}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) handleExplainImage(file, "student");
+                  }}
+                />
+                <button
+                  type="button"
+                  className="voice-mic-button image-upload-chat-button"
+                  disabled={studentLoading}
+                  onClick={() => studentImageInputRef.current?.click()}
+                  title="Upload an image to explain"
+                  aria-label="Upload an image to explain"
+                >
+                  <ImageUploadIcon />
+                </button>
+
                 <span className="qa-student-hint">Press Ctrl+Enter or click Send</span>
               </div>
               <button
@@ -767,7 +866,85 @@ export default function QuestionPage({ auth }) {
           )}
         </article>
       )}
+
+      {/* ── PUBLIC: Upload an image to understand ─────────────────── */}
+      {isPublic && (
+        <section className="image-explain-section">
+          <h2 className="image-explain-heading">Upload a document to understand</h2>
+          <p className="image-explain-lead">
+            Take a photo of a legal notice, FIR, affidavit, or any printed document.
+            We'll extract the text and explain it in plain language.
+          </p>
+
+          {/* Hidden file input */}
+          <input
+            ref={publicImageInputRef}
+            type="file"
+            accept=".jpg,.jpeg,.png"
+            className="sr-only-input"
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) handleExplainImage(file, "public");
+            }}
+          />
+
+          <button
+            type="button"
+            className="lookup-button lookup-button-outline image-explain-upload-btn"
+            disabled={imageLoading}
+            onClick={() => publicImageInputRef.current?.click()}
+          >
+            {imageLoading ? (
+              <>
+                <span className="button-spinner button-spinner-dark" aria-hidden="true" />
+                Analysing image…
+              </>
+            ) : (
+              <>
+                <ImageUploadIcon />
+                Choose image (.jpg, .png)
+              </>
+            )}
+          </button>
+
+          {/* Disclaimer applies here too */}
+          <div className="public-disclaimer-banner image-explain-disclaimer" role="note">
+            <div className="public-disclaimer-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 16v-4m0-4h.01" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div className="public-disclaimer-text">
+              <strong>Legal Information Notice:</strong> This explanation is for general
+              understanding only, not legal advice. Consult a qualified lawyer for guidance
+              on your specific situation.
+            </div>
+          </div>
+
+          {/* Loading */}
+          {imageLoading && (
+            <LoadingSpinner label="Extracting and explaining document…" />
+          )}
+
+          {/* Result / Error */}
+          {!imageLoading && imageResult && (
+            <article className="image-explain-result">
+              {imageResult.error ? (
+                <p className="lookup-message lookup-error">{imageResult.error}</p>
+              ) : (
+                <>
+                  <p className="image-explain-filename">{imageResult.filename}</p>
+                  <div className="question-answer">{imageResult.explanation}</div>
+                </>
+              )}
+            </article>
+          )}
+        </section>
+      )}
     </section>
   );
 }
-

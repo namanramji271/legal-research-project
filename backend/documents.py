@@ -662,3 +662,83 @@ def get_client_summary(
         )
     summary = _generate_client_summary(record["full_text"])
     return {"case_name": request.case_name, "client_summary": summary}
+
+def _generate_document_explanation(text: str, max_chars: int = 20000) -> str:
+    """Plain-language explanation of an unknown document for a layperson -
+    NOT case-law search. The corpus's narrow topic scope (murder/culpable
+    homicide/private defence) means most real-world documents a public
+    user uploads (notices, letters, FIRs unrelated to this corpus) won't
+    meaningfully match anything in search anyway - explaining the document
+    itself is the honest, useful thing to do instead."""
+    truncated = text[:max_chars]
+    prompt = f"""You are helping someone with no legal training understand a document 
+they received. Using ONLY the text below:
+
+1. Say what kind of document this appears to be (e.g. a notice, a form, a 
+   letter, a report) in plain terms.
+2. Explain any important terms or sections in plain English, avoiding 
+   legal jargon.
+3. Do NOT give advice about what the person should do about their specific 
+   situation, and do NOT guess at legal consequences for them personally.
+4. End by reminding them to consult a qualified lawyer for guidance on 
+   their specific situation.
+
+Keep the explanation under 200 words.
+
+Document text:
+{truncated}
+
+Explanation:"""
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            explanation = (response.text or "").strip()
+            if explanation:
+                return explanation
+        except Exception as error:
+            last_error = error
+            time.sleep(2)
+    raise HTTPException(
+        status_code=503,
+        detail="The AI explanation service is temporarily unavailable. Please try again in a moment.",
+    ) from last_error
+
+
+@router.post("/documents/explain-image")
+async def explain_image_document(
+    file: UploadFile = File(...),
+    user=Depends(require_role("public", "student")),
+) -> dict[str, Any]:
+    """Public/Student: OCR an uploaded image and explain it in plain
+    language - no case-law search, unlike the lawyer/judge upload flow."""
+    filename = file.filename or ""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png"}:
+        await file.close()
+        raise HTTPException(
+            status_code=400, detail="Upload a .jpg, .jpeg, or .png image"
+        )
+
+    try:
+        file_bytes = await file.read()
+    finally:
+        await file.close()
+
+    extracted_text = _extract_image_text(file_bytes)
+    if not extracted_text.strip():
+        return {
+            "filename": filename,
+            "extracted_text": "",
+            "explanation": None,
+            "error": "No readable text could be extracted from this image.",
+        }
+
+    explanation = _generate_document_explanation(extracted_text)
+    return {
+        "filename": filename,
+        "extracted_text": extracted_text,
+        "explanation": explanation,
+        "error": None,
+    }
