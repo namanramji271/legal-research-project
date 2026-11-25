@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "generated_at_utc": "2026-11-25T07:41:37.865585+00:00",
+    "generated_at_utc": "2026-11-25T08:55:36.003827+00:00",
     "query_count": 15,
     "chunk_count": 533,
     "chunk_depth": 100,
@@ -86,6 +86,33 @@
         "upper": 1.0
       }
     },
+    "BGE-M3": {
+      "precision@5": {
+        "estimate": 0.3733333333333333,
+        "lower": 0.29333333333333333,
+        "upper": 0.4533333333333333
+      },
+      "recall@5": {
+        "estimate": 0.5350793650793652,
+        "lower": 0.37803703703703706,
+        "upper": 0.6944576719576719
+      },
+      "MRR": {
+        "estimate": 0.6444444444444444,
+        "lower": 0.49986111111111126,
+        "upper": 0.788888888888889
+      },
+      "nDCG@5": {
+        "estimate": 0.5652922014738313,
+        "lower": 0.44329010688751574,
+        "upper": 0.700883387966236
+      },
+      "Hit@5": {
+        "estimate": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      }
+    },
     "RRF BM25:dense 1:1": {
       "precision@5": {
         "estimate": 0.36000000000000004,
@@ -152,8 +179,8 @@
         "upper": 0.6984523809523808
       },
       "MRR": {
-        "estimate": 0.6425925925925926,
-        "lower": 0.4869907407407408,
+        "estimate": 0.6428104575163399,
+        "lower": 0.48721405228758174,
         "upper": 0.8055555555555556
       },
       "nDCG@5": {
@@ -216,6 +243,33 @@
         "estimate": 0.0,
         "lower": 0.0,
         "upper": 0.0
+      },
+      "Hit@5": {
+        "estimate": 0.0,
+        "lower": 0.0,
+        "upper": 0.0
+      }
+    },
+    "BGE-M3": {
+      "precision@5": {
+        "estimate": -0.04000000000000001,
+        "lower": -0.11999999999999998,
+        "upper": 0.02666666666666666
+      },
+      "recall@5": {
+        "estimate": -0.013174603174603177,
+        "lower": -0.07197354497354497,
+        "upper": 0.041115079365079354
+      },
+      "MRR": {
+        "estimate": -0.08888888888888889,
+        "lower": -0.24458333333333324,
+        "upper": 0.05555555555555555
+      },
+      "nDCG@5": {
+        "estimate": -0.057572581367754234,
+        "lower": -0.16775784258229565,
+        "upper": 0.0445929455334035
       },
       "Hit@5": {
         "estimate": 0.0,
@@ -289,8 +343,8 @@
         "upper": 0.035211640211640194
       },
       "MRR": {
-        "estimate": -0.09074074074074075,
-        "lower": -0.20740740740740743,
+        "estimate": -0.09052287581699346,
+        "lower": -0.20718954248366017,
         "upper": 0.0
       },
       "nDCG@5": {
@@ -308,7 +362,5 @@
   "ceiling": {
     "mean_max_p_at_5": 0.6799999999999999
   },
-  "warnings": [
-    "BGE-M3 skipped: backend/data/chroma_db_bge was not found. Build it with scripts/build_embeddings_bge.py to include this method."
-  ]
+  "warnings": []
 }
