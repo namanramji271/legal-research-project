@@ -7,10 +7,9 @@ citation-backed QA with a citation verification safeguard.
 
 ## Stack
 - Backend: FastAPI (Python)
-- Frontend: React + Vite + Tailwind
+- Frontend: React + Vite, plain CSS (src/App.css, src/index.css). No Tailwind, no router; page state is one useState in App.jsx.
 - Vector DB: ChromaDB
-- Embeddings: all-MiniLM-L6-v2 (chosen for speed without GPU; BGE-M3
-  comparison planned for later evaluation phase, not this week)
+- Embeddings: all-MiniLM-L6-v2 is the production index. BGE-M3 was compared and is built separately (see the BGE-M3 section); neither is the best retriever on this corpus, BM25 is.
 - LLM: Gemini API (google-genai SDK). MODEL_NAME was gemini-2.5-flash,
   changed to gemini-3.6-flash in both qa.py and documents.py after
   discovering gemini-2.5-flash returns 404 ("no longer available to new
@@ -420,7 +419,7 @@ uploaded document AND individual related judgments, on demand.
 
 - backend/documents.py: added Gemini client setup identical to qa.py's
   pattern (load_dotenv, GEMINI_API_KEY check/RuntimeError, MODEL_NAME =
-  "gemini-2.5-flash", client = genai.Client(...)) — kept self-contained in
+  "gemini-3.6-flash", client = genai.Client(...)) — kept self-contained in
   documents.py, qa.py untouched.
 - summarize_legal_text(text: str, max_chars: int = 20000) -> str: truncates
   input over max_chars (appends a truncation note to output when triggered),
@@ -783,19 +782,9 @@ systems) is planned; role stays self-declared/personalization-only
 forever. Document Stage 3's absence explicitly as a scoping decision in
 the paper, not an oversight.
 
-Corpus expansion: currently 48 judgments; targeting 100+ via a law-student
-contact's access to additional case files (in progress, external
-dependency, not yet started as of this writing). Motivated by two
-existing findings: the IPC 304 retrieval weakness in the original
-evaluation (see Evaluation section above), and the sentencing-pattern-
-insight feature's descriptive-only framing (48 judgments is explicitly
-too small to present theme counts as statistically meaningful - re-run
-retrieval evaluation and revisit that framing once the corpus grows).
+Built since this section was first written: voice assistant (browser Web Speech API, no Gemini cost) and image upload with Tesseract OCR for all four personas. Still deferred: regional-language TTS. Out of scope: handwriting recognition, visual evidence recognition, identity-verified RBAC.
 
-Other deferred ideas (not yet scoped into a stage): voice assistant
-(speech-to-text/text-to-speech, likely browser-native APIs to avoid
-Gemini quota cost), image upload with OCR (current Document Upload only
-handles PDF/TXT).
+Corpus expansion: currently 48 judgments. We build it ourselves from IL-TUR/ILDC (access already held); there is no dependency on the law-student contact. See ROADMAP.md step 3.
 
 ## Repo hygiene — resolved
 backend/.gitignore previously listed the wrong path (chroma_store/, an
@@ -852,3 +841,31 @@ prevents it from being accidentally re-added.
   files. Any new Gemini call added elsewhere should follow the same
   retry-once-then-clean-503 error pattern used in both files, not a bare
   call.
+
+## Audit findings (verified 2026-11-25) — fixes tracked in ROADMAP.md
+- QA context is truncated: search_judgments() returns snippet = first 200 chars of a ~2,800-char chunk (~7%), and qa.py build_prompt feeds that snippet to Gemini. The 13-question QA eval ran on truncated context and must be re-run after the fix.
+- Retrieval comparison is not like for like: the dense eval takes 10 chunks, which collapse to fewer unique cases after dedup and the 0.65 threshold, while bm25_search returns 10 unique cases. BM25 numbers reproduce offline (P@5 0.413, R@5 0.548, MRR 0.733). Re-run all methods at case level with equal candidate depth.
+- /ask and /search still use dense MiniLM as primary retriever; BM25 only feeds the explainability badge.
+- The IPC-BNS mapper (18 rows) is a standalone lookup, not used in retrieval or QA.
+- Corpus: 48 judgments, all Supreme Court, 1949-2002. IPC 302 x41, 304 x9, 300 x4, 299 x2, 301 x1; IPC 96-105 appear in one judgment total; 106 has none. UI "Corpus scope" text overstates private-defence coverage.
+- Case names are anonymized ILDC ids; no real case names or SCC/AIR citations exist in the data.
+- Citation verifier only regex-checks "ILDC case \d{4}_\d+" against the retrieved set; it does not check that claims are supported.
+- Eval sets: 4 of 15 retrieval queries have one relevant case; mean max achievable P@5 is 0.68; label provenance unverified (believed AI-assisted); single annotator; no confidence intervals; QA answerability detected by regex.
+- Security: /ask and /mapping/* need no login; roles are self-declared; CORS allows *; JWT in localStorage; no rate limiting or upload size limit; /documents/summarize-uploaded accepts arbitrary text; prompt injection from uploads is unhandled.
+- MODEL_NAME and the Gemini client are duplicated in qa.py and documents.py.
+
+## Decisions and constraints
+- Priority is the IEEE paper; do not finalize the paper's evaluation numbers before ROADMAP.md step 2 is done.
+- Planned: a thin LLM provider layer, temperature 0, cached responses for all evals; Gemini for the demo, a free open-model provider (e.g. Groq) for dev and evals.
+- Dense models (MiniLM, BGE-M3, rerankers) cannot run in Claude's cloud environment (Hugging Face is blocked there). Run them on Colab (free T4) or locally; keep scripts notebook-friendly.
+- Team: Venkatesh on Windows, Naman on macOS. Code must be cross-platform: no hardcoded Windows paths, LF line endings.
+
+## Working rules for agents
+- Read this file and ROADMAP.md; do only the assigned roadmap step; no refactors outside its scope.
+- One branch per task, never commit to main, do not push unless told.
+- Verify with real command output, not syntax checks.
+- Never commit .env, data files, indexes, or users.db.
+- Update the relevant section of this file in the same commit as the change, in small edits.
+- Gemini free tier is about 20 requests/day and 5/minute: no live-LLM tests; use cached responses.
+- project_status_checklist.md is the historical Phase 1 tracker; ROADMAP.md is current.
+
