@@ -42,6 +42,20 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import qa  # noqa: E402
+from search import search_judgments  # noqa: E402
+
+
+def _step2_dense_cases(query: str, n_cases: int, **_kwargs: Any) -> list[dict[str, Any]]:
+    """Pin this experiment to the dense 5-chunk retrieval it was started with.
+
+    Production /ask now follows RETRIEVER (see config.py). This snippet-vs-full
+    comparison keeps the original retrieval so cached prompts stay valid and
+    the remaining calls are comparable with the completed ones.
+    """
+    return search_judgments(query, n_results=n_cases)
+
+
+qa.retrieve_cases = _step2_dense_cases
 
 
 def _cache_key(prompt: str) -> str:
@@ -82,7 +96,7 @@ def _prepare_tasks(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build exact prompts in advance so pending cache misses can be counted."""
     tasks: list[dict[str, Any]] = []
     for question_index, entry in enumerate(questions):
-        chunks = qa.search_judgments(entry["question"], n_results=QA_N_RESULTS)
+        chunks = _step2_dense_cases(entry["question"], QA_N_RESULTS)
         for context_mode in CONTEXT_MODES:
             prompt = (
                 qa.build_prompt(entry["question"], chunks, context_mode=context_mode)
