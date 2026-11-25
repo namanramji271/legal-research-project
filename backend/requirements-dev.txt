@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Corpus regeneration from the gated IL-TUR/ILDC dataset.
+datasets==5.2.0
