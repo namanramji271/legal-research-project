@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "generated_at_utc": "2026-11-25T08:55:36.003827+00:00",
+    "generated_at_utc": "2026-11-25T15:15:23.201399+00:00",
     "query_count": 15,
     "chunk_count": 533,
     "chunk_depth": 100,
@@ -79,6 +79,33 @@
         "estimate": 0.6228647828415855,
         "lower": 0.5081477946925778,
         "upper": 0.7463623207884542
+      },
+      "Hit@5": {
+        "estimate": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      }
+    },
+    "BM25 + stopwords": {
+      "precision@5": {
+        "estimate": 0.44000000000000006,
+        "lower": 0.3333333333333333,
+        "upper": 0.5733333333333334
+      },
+      "recall@5": {
+        "estimate": 0.563068783068783,
+        "lower": 0.4122486772486773,
+        "upper": 0.7113068783068782
+      },
+      "MRR": {
+        "estimate": 0.7555555555555556,
+        "lower": 0.6222222222222222,
+        "upper": 0.8891666666666664
+      },
+      "nDCG@5": {
+        "estimate": 0.663397464440724,
+        "lower": 0.5352816681506295,
+        "upper": 0.7983605006847927
       },
       "Hit@5": {
         "estimate": 1.0,
@@ -250,6 +277,33 @@
         "upper": 0.0
       }
     },
+    "BM25 + stopwords": {
+      "precision@5": {
+        "estimate": 0.02666666666666667,
+        "lower": 0.0,
+        "upper": 0.06666666666666667
+      },
+      "recall@5": {
+        "estimate": 0.014814814814814814,
+        "lower": 0.0,
+        "upper": 0.03703703703703704
+      },
+      "MRR": {
+        "estimate": 0.02222222222222222,
+        "lower": -0.03333333333333333,
+        "upper": 0.10027777777777754
+      },
+      "nDCG@5": {
+        "estimate": 0.04053268159913841,
+        "lower": -0.004289234886939051,
+        "upper": 0.1066611290322818
+      },
+      "Hit@5": {
+        "estimate": 0.0,
+        "lower": 0.0,
+        "upper": 0.0
+      }
+    },
     "BGE-M3": {
       "precision@5": {
         "estimate": -0.04000000000000001,
@@ -357,6 +411,28 @@
         "lower": -0.2,
         "upper": 0.0
       }
+    }
+  },
+  "stopwords_vs_bm25_query_changes": {
+    "precision@5": {
+      "better": 2,
+      "worse": 0
+    },
+    "recall@5": {
+      "better": 2,
+      "worse": 0
+    },
+    "MRR": {
+      "better": 1,
+      "worse": 1
+    },
+    "nDCG@5": {
+      "better": 5,
+      "worse": 3
+    },
+    "Hit@5": {
+      "better": 0,
+      "worse": 0
     }
   },
   "ceiling": {
