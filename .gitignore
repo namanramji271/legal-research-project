@@ -3,6 +3,7 @@ venv/
 __pycache__/
 node_modules/
 .DS_Store
+triage_output.txt
 backend/data/*.db
 backend/data/judgments.jsonl
 backend/data/chroma_db*/
