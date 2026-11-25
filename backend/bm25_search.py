@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -108,14 +109,26 @@ def bm25_search(query: str, n_results: int = 10) -> list[dict[str, Any]]:
     return results
 
 
-def bm25_search_chunks(query: str, n_chunks: int = 100) -> list[dict[str, Any]]:
-    """Return positive-scoring BM25 chunks in rank order without case deduplication."""
+def bm25_search_chunks(
+    query: str,
+    n_chunks: int = 100,
+    min_score: float = 0.0,
+    stopwords: Collection[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return BM25 chunks scoring above ``min_score`` in rank order.
+
+    Chunks are not deduplicated by case. ``stopwords`` filters query tokens
+    only; the index itself is unchanged. With the default ``min_score`` of 0,
+    every positive-scoring chunk is kept.
+    """
     if not query.strip():
         raise ValueError("query must not be empty")
     if n_chunks <= 0:
         raise ValueError("n_chunks must be positive")
 
     query_tokens = _tokenize(query)
+    if stopwords:
+        query_tokens = [token for token in query_tokens if token not in stopwords]
     if not query_tokens:
         return []
 
@@ -127,7 +140,7 @@ def bm25_search_chunks(query: str, n_chunks: int = 100) -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
     for index in ranked_indices:
-        if scores[index] <= 0:
+        if scores[index] <= min_score:
             break
         metadata = judgment_index.metadatas[index]
         results.append(
