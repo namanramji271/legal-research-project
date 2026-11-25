@@ -551,9 +551,15 @@ unrelated scoring heuristic.
   already-retrieved case-name lists as input. Returns:
   - matched_methods: ["dense"] and/or ["bm25"] depending on which
     retrieval method(s) surfaced this case.
-  - matched_terms: non-stopword query terms found (case-insensitive
-    substring match) in the snippet, order-preserved, deduplicated,
-    capped at 8. Hardcoded stopword list, no new NLP dependency.
+  - matched_terms: non-stopword query terms (single characters skipped)
+    found as whole words in the text passed in, order-preserved,
+    deduplicated, capped at 8. Query and text are both tokenized with
+    bm25_search._tokenize, so badge terms are the query terms BM25 could
+    match in that text. Hardcoded stopword list, no new NLP dependency.
+    UPDATED (fix/badge-matched-terms): /search passes each result's full
+    chunk_text, not the 200-char snippet; previously strong BM25 matches
+    often showed no terms (e.g. 1967_328 for "right of private defence
+    exceeded"), and substring matching let "act" match inside "fact".
   - relevance_label: "Strong match" if both dense and BM25 agree on this
     case (method-agreement-as-confidence is the project's own empirical
     finding, not an invented heuristic), "Moderate match" if only one
@@ -881,9 +887,10 @@ prevents it from being accidentally re-added.
 - `backend/config.py` is the only place that reads `RETRIEVER` (`bm25` | `dense` | `hybrid`, default `bm25`) and `BM25_MIN_SCORE` (default 0). It exposes `config.SETTINGS`; invalid values raise at import. Both are in `.env.example`.
 - `search.retrieve_chunks(query, n_chunks, retriever=None, distance_threshold=0.65)` dispatches on the setting. bm25: `bm25_search_chunks` with `explainability.STOPWORDS` removed from the query, chunks scoring above `BM25_MIN_SCORE`, no distance threshold. dense: `search_judgments` with the 0.65 threshold. hybrid: 1:1 weighted RRF (k=60) of both, one record per case.
 - `search.retrieve_cases(query, n_cases)` over-fetches `CASE_OVERFETCH_CHUNKS` (50) chunks, collapses to unique cases and keeps the best chunk of each top case.
-- GET /search returns the top `n_results` cases. It still strips `chunk_text` (and the internal `score`/`rrf_score`). The badge is computed exactly as before (`bm25_search(q, 15)` vs `search_judgments(q, n_results)`, independent of `RETRIEVER`); only the exception fallback now names the active retriever.
+- GET /search returns the top `n_results` cases. It still strips `chunk_text` (and the internal `score`/`rrf_score`). The badge methods and label are computed as before (`bm25_search(q, 15)` vs `search_judgments(q, n_results)`, independent of `RETRIEVER`); the exception fallback names the active retriever. `matched_terms` is computed from the full `chunk_text` before it is stripped (see the explainability section).
 - POST /ask: `ask_question()` sends the best chunk of each of the top `n_results` cases (`AskRequest.n_results` default 5) to Gemini with full `chunk_text`. Prompt and citation verifier are unchanged. The frontend currently sends `n_results: 10` (QA_RESULT_LIMIT in QuestionPage.jsx), so the live app uses 10 cases until that changes.
 - `backend/eval/check_production_retriever.py` (run with `RETRIEVER=bm25` and `RETRIEVER=dense`) checks the production path at the fair-eval setup (100 chunks, dense threshold off) against `results/fair_retrieval.json` and exits 1 on mismatch. Verified: bm25 0.440/0.563/0.756 (matches `BM25 + stopwords`), dense 0.307/0.494/0.595 (matches MiniLM). Production defaults (50-chunk over-fetch, top 5 cases): bm25 0.440/0.563/0.756, dense 0.307/0.494/0.577. The former 5-chunk default gave bm25 0.293/0.438/0.733 and dense 0.293/0.460/0.563.
 - BM25 has no relevance cutoff at the default `BM25_MIN_SCORE=0`. Gibberish returns nothing (no token in the vocabulary), but every out-of-corpus QA question still returns 5 cases with top-1 scores of 8.3-15.3, against 14.1-29.7 for labeled queries. The ranges overlap (the GST question scores 15.3), so no single threshold separates them; /ask relies on Gemini declining. The old dense "no relevant judgments" empty path now triggers only for queries with no vocabulary match.
 - Tests: `backend/tests/test_retriever.py` (monkeypatched; no Gemini, ChromaDB or model downloads).
 - Open issue: BM25 has no out-of-corpus cutoff; /ask relies on Gemini declining. To test after quota reset.
+- Open item: SearchPage.jsx could show a 'Matched terms' line; the highlight only covers the 200-char snippet.
