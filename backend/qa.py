@@ -1,7 +1,8 @@
 """
 Citation-backed question answering over the judgment corpus.
 
-Retrieves relevant judgment chunks via semantic search, asks Gemini to
+Retrieves the best chunk of each top case via the configured retriever
+(RETRIEVER in config.py), asks Gemini to
 answer strictly from that context, then verifies every case the model
 cites actually appears in the retrieved source set before returning the
 answer as "verified".
@@ -16,7 +17,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-from search import search_judgments
+from search import retrieve_cases
 
 
 
@@ -44,7 +45,7 @@ class ConversationTurn(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
-    n_results: int = 10
+    n_results: int = 5  # number of cases; one best chunk each
     persona: str | None = None
     conversation_history: list[ConversationTurn] = []
 
@@ -182,7 +183,7 @@ def ask_question(
     context_mode: str = "full",
 ) -> dict:
     retrieval_query = _build_retrieval_query(question, conversation_history)
-    chunks = search_judgments(retrieval_query, n_results=n_results)
+    chunks = retrieve_cases(retrieval_query, n_cases=n_results)
 
     if not chunks:
         return {

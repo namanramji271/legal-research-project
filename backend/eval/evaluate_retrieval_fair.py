@@ -29,6 +29,8 @@ CHUNK_DEPTH = 100
 TOP_K = 5
 BOOTSTRAP_RESAMPLES = 1000
 BOOTSTRAP_SEED = 0
+STOPWORDS_METHOD = "BM25 + stopwords"
+METRIC_LABELS = {"precision@5": "P@5", "recall@5": "R@5", "MRR": "MRR", "nDCG@5": "nDCG@5", "Hit@5": "Hit@5"}
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -51,6 +53,7 @@ from eval.metrics import (  # noqa: E402
     recall_at_k,
     weighted_rrf,
 )
+from explainability import STOPWORDS  # noqa: E402
 from search import search_judgments, search_judgments_bge  # noqa: E402
 
 
@@ -89,6 +92,51 @@ def _confidence_summaries(scores: dict[str, list[float]]) -> dict[str, dict[str,
     }
 
 
+def _stopwords_note(payload: dict[str, Any]) -> list[str]:
+    """Describe the stopword-filter difference from its paired bootstrap CIs."""
+    differences = payload["paired_differences_vs_bm25"].get(STOPWORDS_METHOD)
+    if not differences:
+        return []
+    parts = []
+    significant = []
+    for metric_name, label in METRIC_LABELS.items():
+        result = differences[metric_name]
+        parts.append(f"{label} {result['estimate']:+.3f}")
+        if result["lower"] > 0 or result["upper"] < 0:
+            significant.append(label)
+    largest = max(abs(differences[name]["estimate"]) for name in METRIC_LABELS)
+    if significant:
+        verdict = (
+            "The 95% paired CI excludes zero for "
+            + ", ".join(significant)
+            + "; treat this as exploratory because the filter was chosen after seeing these queries."
+        )
+    else:
+        verdict = (
+            "Every 95% paired CI includes zero, so the difference is not "
+            "statistically significant on these 15 queries."
+        )
+    lines = [
+        "## Stopword filter",
+        "",
+        f"- `{STOPWORDS_METHOD}` minus `BM25`: " + ", ".join(parts) + f" (largest absolute difference {largest:.3f}).",
+        f"- {verdict}",
+    ]
+    changes = payload.get("stopwords_vs_bm25_query_changes", {})
+    if changes:
+        lines.append(
+            f"- Per-query changes out of {payload['metadata']['query_count']} (better/worse): "
+            + ", ".join(
+                f"{label} {changes[name]['better']}/{changes[name]['worse']}"
+                for name, label in METRIC_LABELS.items()
+            )
+            + ". Some CI bounds sit at exactly zero because no query got worse on that metric."
+        )
+    return lines + [
+        "- The filter was chosen after seeing these 15 queries, so this comparison is not an independent validation.",
+    ]
+
+
 def _markdown_report(payload: dict[str, Any]) -> str:
     lines = [
         "# Fair Retrieval Evaluation Findings",
@@ -102,6 +150,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "- All rankings are collapsed to unique case names in first-occurrence order before scoring.",
         f"- Bootstrap: {BOOTSTRAP_RESAMPLES} paired query resamples, seed {BOOTSTRAP_SEED}; percentile 95% CIs.",
         "- Hybrid RRF weights are exploratory because they are compared on these same 15 queries.",
+        f"- `{STOPWORDS_METHOD}` drops `explainability.STOPWORDS` from query tokens before BM25 scoring (the index is unchanged). It is the production BM25 configuration. The filter was chosen after seeing these 15 queries, so its comparison with plain BM25 is exploratory, not an independent validation. Hybrid rows use plain BM25.",
         "",
         "## Model names",
         "",
@@ -143,6 +192,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
             )
         lines.append("| " + " | ".join(cells) + " |")
 
+    lines.extend(["", *_stopwords_note(payload)])
     lines.extend(
         [
             "",
@@ -173,6 +223,9 @@ def main() -> None:
             query, n_results=CHUNK_DEPTH, distance_threshold=None
         ),
         "BM25": lambda query: bm25_search_chunks(query, n_chunks=CHUNK_DEPTH),
+        STOPWORDS_METHOD: lambda query: bm25_search_chunks(
+            query, n_chunks=CHUNK_DEPTH, stopwords=STOPWORDS
+        ),
     }
 
     if BGE_CHROMA_DB_PATH.exists():
@@ -237,6 +290,19 @@ def main() -> None:
         }
         for method, scores in raw_scores.items()
     }
+    query_changes = {
+        metric_name: {
+            "better": sum(
+                candidate > baseline
+                for candidate, baseline in zip(raw_scores[STOPWORDS_METHOD][metric_name], values)
+            ),
+            "worse": sum(
+                candidate < baseline
+                for candidate, baseline in zip(raw_scores[STOPWORDS_METHOD][metric_name], values)
+            ),
+        }
+        for metric_name, values in bm25_scores.items()
+    }
     ceiling_values = [
         min(TOP_K, len(entry["relevant_cases"])) / TOP_K for entry in queries
     ]
@@ -263,6 +329,7 @@ def main() -> None:
         },
         "metrics": metrics,
         "paired_differences_vs_bm25": paired_differences,
+        "stopwords_vs_bm25_query_changes": query_changes,
         "ceiling": {"mean_max_p_at_5": sum(ceiling_values) / len(ceiling_values)},
         "warnings": warnings_list,
     }

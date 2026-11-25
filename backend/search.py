@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, Query
 
 from auth import require_role
 
-from bm25_search import bm25_search
+import config
+from bm25_search import bm25_search, bm25_search_chunks
 from embeddings import (
     BGE_CHROMA_DB_PATH,
     BGE_COLLECTION_NAME,
@@ -19,9 +20,14 @@ from embeddings import (
     get_bge_embedding_function,
     get_embedding_function,
 )
-from explainability import compute_match_explanation
+from eval.metrics import collapse_cases, weighted_rrf
+from explainability import STOPWORDS, compute_match_explanation
 
 SEARCH_DISTANCE_THRESHOLD = 0.65
+# Chunks fetched before collapsing to unique cases for /search and /ask.
+CASE_OVERFETCH_CHUNKS = 50
+HYBRID_RRF_K = 60
+HYBRID_WEIGHTS = {"bm25": 1.0, "dense": 1.0}
 
 router = APIRouter()
 
@@ -149,18 +155,85 @@ def search_judgments_bge(
     return results
 
 
+def retrieve_chunks(
+    query: str,
+    n_chunks: int,
+    retriever: str | None = None,
+    distance_threshold: float | None = SEARCH_DISTANCE_THRESHOLD,
+) -> list[dict[str, Any]]:
+    """Return ranked chunks from the configured retriever.
+
+    ``retriever`` defaults to ``config.SETTINGS.retriever``. BM25 drops
+    STOPWORDS from the query, keeps chunks scoring above
+    ``config.SETTINGS.bm25_min_score`` and has no distance threshold.
+    ``distance_threshold`` applies to the dense part of ``dense`` and
+    ``hybrid`` only. Hybrid is 1:1 reciprocal rank fusion and returns one
+    record per case.
+    """
+    if not query.strip():
+        raise ValueError("query must not be empty")
+    if n_chunks <= 0:
+        raise ValueError("n_chunks must be positive")
+    retriever = retriever or config.SETTINGS.retriever
+
+    def bm25_chunks() -> list[dict[str, Any]]:
+        return bm25_search_chunks(
+            query,
+            n_chunks=n_chunks,
+            min_score=config.SETTINGS.bm25_min_score,
+            stopwords=STOPWORDS,
+        )
+
+    def dense_chunks() -> list[dict[str, Any]]:
+        return search_judgments(
+            query, n_results=n_chunks, distance_threshold=distance_threshold
+        )
+
+    if retriever == "bm25":
+        return bm25_chunks()
+    if retriever == "dense":
+        return dense_chunks()
+    if retriever == "hybrid":
+        return weighted_rrf(
+            {"bm25": bm25_chunks(), "dense": dense_chunks()},
+            HYBRID_WEIGHTS,
+            k=HYBRID_RRF_K,
+            limit=n_chunks,
+        )
+    raise ValueError(f"unknown retriever {retriever!r}")
+
+
+def retrieve_cases(
+    query: str,
+    n_cases: int,
+    retriever: str | None = None,
+    distance_threshold: float | None = SEARCH_DISTANCE_THRESHOLD,
+) -> list[dict[str, Any]]:
+    """Return the best-ranked chunk of each of the top ``n_cases`` cases."""
+    if n_cases <= 0:
+        raise ValueError("n_cases must be positive")
+    chunks = retrieve_chunks(
+        query,
+        n_chunks=max(CASE_OVERFETCH_CHUNKS, n_cases),
+        retriever=retriever,
+        distance_threshold=distance_threshold,
+    )
+    return collapse_cases(chunks)[:n_cases]
+
+
 @router.get("/search")
 def search(
     q: str = Query(..., min_length=1, description="Natural-language legal query"),
-    n_results: int = Query(5, ge=1, description="Number of matching chunks to return"),
+    n_results: int = Query(5, ge=1, description="Number of matching cases to return"),
     user=Depends(require_role("lawyer", "judge")),
 ) -> list[dict[str, Any]]:
-    """Expose semantic judgment retrieval as a frontend-ready JSON response."""
-    results = search_judgments(q, n_results)
+    """Return the top cases from the configured retriever, with badge metadata."""
+    results = retrieve_cases(q, n_results)
     if not results:
         return results
 
     try:
+        # Badge inputs are computed exactly as before, independent of RETRIEVER.
         bm25_results = bm25_search(q, n_results=15)
         bm25_case_names = list(
             dict.fromkeys(
@@ -169,7 +242,9 @@ def search(
         )
         dense_case_names = list(
             dict.fromkeys(
-                r.get("case_name", "") for r in results if r.get("case_name")
+                r.get("case_name", "")
+                for r in search_judgments(q, n_results)
+                if r.get("case_name")
             )
         )
         for result in results:
@@ -182,12 +257,21 @@ def search(
             )
             result.update(explanation)
     except Exception:
+        fallback_methods = {
+            "bm25": ["bm25"],
+            "dense": ["dense"],
+            "hybrid": ["dense", "bm25"],
+        }.get(config.SETTINGS.retriever, ["dense"])
         for result in results:
-            result.setdefault("matched_methods", ["dense"])
+            result.setdefault("matched_methods", fallback_methods)
             result.setdefault("matched_terms", [])
             result.setdefault("relevance_label", "Moderate match")
 
+    # chunk_text stays internal (used by /ask); scores are not part of the UI shape.
     return [
-        {key: value for key, value in result.items() if key != "chunk_text"}
+        {key: value for key, value in result.items() if key not in _INTERNAL_KEYS}
         for result in results
     ]
+
+
+_INTERNAL_KEYS = {"chunk_text", "score", "rrf_score"}

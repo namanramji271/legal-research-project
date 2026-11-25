@@ -64,7 +64,7 @@ function ImageUploadIcon() {
   );
 }
 
-const QA_RESULT_LIMIT = 10;
+const QA_RESULT_LIMIT = 5;
 
 const EXAMPLE_QUESTIONS = [
   "When does the right of private defence exceed reasonable force?",
