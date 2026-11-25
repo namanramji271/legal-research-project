@@ -56,9 +56,11 @@ citation-backed QA with a citation verification safeguard.
   NOTE: backend/chroma_store is an unrelated leftover from an early toy-RAG
   test, not the real data — safe to delete, do not confuse the two paths.
 - Semantic search backend: complete — search_judgments() in backend/search.py
-  returns a flat list of {case_name, court, year, ipc_sections, snippet}.
-  Exposed via GET /search?q={query}&n_results={n}, registered in main.py,
-  no /api prefix. Tested and confirmed working via browser/docs.
+  (the dense retriever) returns a flat list of {case_name, court, year,
+  ipc_sections, snippet, chunk_text}. GET /search?q={query}&n_results={n} is
+  registered in main.py, no /api prefix; since step 2b it calls
+  retrieve_cases() (RETRIEVER, default bm25) and returns up to n_results
+  cases — see Production retriever. Tested and confirmed working via browser/docs.
   RELEVANCE THRESHOLD (Day 4): SEARCH_DISTANCE_THRESHOLD = 0.65 (module-level
   constant in search.py). Chroma cosine distance, lower = more similar;
   chunks with distance > 0.65 are discarded inside search_judgments() before
@@ -71,17 +73,25 @@ citation-backed QA with a citation verification safeguard.
   provocation") return relevant results; off-topic/gibberish queries
   ("dgadfad sdfsdf", "culprit") correctly return no matches instead of
   forcing weak matches through. No database/embedding changes were made.
+  UPDATED (step 2b): the 0.65 threshold applies only to the dense
+  retriever. BM25 has no threshold: only queries with no word in the corpus
+  vocabulary (e.g. "dgadfad sdfsdf") return nothing; real-word off-topic
+  queries still return cases.
 - Semantic search frontend: complete — SearchPage.jsx, deduplicated results,
   tabbed navigation. Quality note: MiniLM is a general-purpose model, so
   results are a mix of strong and weak matches — demo with pre-tested
   queries (e.g. "right of private defence", culpable-homicide-distinction
-  queries perform well) rather than arbitrary live queries. Post-threshold,
-  weak matches are filtered before reaching the frontend, but empty-result
+  queries perform well) rather than arbitrary live queries. With
+  RETRIEVER=dense, weak matches are filtered by the threshold before reaching
+  the frontend; BM25 (default since step 2b) has no such filter, so off-topic
+  real-word queries still return results. Empty-result
   states should still be handled gracefully in the UI (verify SearchPage.jsx
   shows a clear "no results" state, not a blank list).
 - Citation-backed QA backend: complete — backend/qa.py, ask_question()
-  retrieves top-n chunks via search_judgments() (n_results=10 default,
-  increased from 5 since 5 was too few to reliably surface good context),
+  retrieves the best chunk of each of the top n cases via retrieve_cases()
+  (n_results=5 cases by default since step 2b; previously top-n chunks via
+  search_judgments() with n_results=10 default, increased from 5 since 5 was
+  too few to reliably surface good context),
   builds a grounded prompt instructing Gemini to answer only from provided
   context and cite exact case names, calls Gemini, returns
   {answer, verified, sources_used, unverified_citations, retrieved_sources}.
@@ -96,6 +106,9 @@ citation-backed QA with a citation verification safeguard.
   can now trigger even when Chroma returned n_results candidates, if all of
   them fell above the 0.65 distance cutoff. CONFIRMED (evaluation phase):
   end-to-end behavior through POST /ask is correct — see QA evaluation below.
+  UPDATED (step 2b): with RETRIEVER=bm25 this empty path only triggers when
+  no query word is in the corpus vocabulary; the 0.65 cutoff applies to
+  RETRIEVER=dense only.
   KNOWN ISSUE: sources_used can contain duplicate case names (same case
   cited multiple times in one answer) — extract_cited_cases() needs to
   deduplicate while preserving first-occurrence order.
@@ -294,7 +307,7 @@ limitation; not fixed (targeted find-and-replace was judged too risky to
 attempt safely across 37 judgments in remaining project time).
 
 CONCLUSION / recommendation: BM25 is the strongest single retrieval method
-found so far for this domain — worth considering as primary retrieval, or
+found so far for this domain — worth considering as primary retrieval (adopted in step 2b), or
 revisiting with a *weighted* fusion (giving BM25 more influence than dense)
 rather than unweighted RRF. This directly contradicts the original hybrid-
 search hypothesis and is genuinely useful negative-result material for the
@@ -579,6 +592,9 @@ unrelated scoring heuristic.
   computation fails, core search results still return with fallback
   values (matched_methods: ["dense"], matched_terms: [], relevance_label:
   "Moderate match") rather than the endpoint erroring out.
+  UPDATED (step 2b): results now come from retrieve_cases(), and the
+  fallback matched_methods names the active retriever (["bm25"], ["dense"]
+  or ["dense", "bm25"] for hybrid).
   Verified via TestClient (all 8 keys present, correct types) AND a real
   running-server request (both agree) — top result on a well-tested
   private-defence query correctly returned "Strong match"/both methods.
@@ -599,8 +615,11 @@ unrelated scoring heuristic.
   repeat the query's exact wording. This is intentional, not a bug (see
   QuestionPage.jsx/SearchPage.jsx design: matched_terms and
   relevance_label are computed independently).
+  UPDATED (fix/badge-matched-terms): matched_terms now comes from the full
+  chunk_text, so it is rarely empty; the on-screen highlight can still be
+  empty because HighlightedSnippet only covers the 200-char snippet.
 
-CONFIRMED WORKING end-to-end (manually tested, screenshots reviewed):
+CONFIRMED WORKING end-to-end (manually tested, screenshots reviewed; pre-2b, dense retrieval):
 - "Sudden provocation reducing murder to culpable homicide": top result
   Strong match/both methods with correctly highlighted terms; two
   Moderate match/dense-only results below, giving a real, visible
@@ -811,8 +830,10 @@ prevents it from being accidentally re-added.
   server startup (auto-rebuilds if the CSV is newer than the DB), and
   is gitignored, not committed
 - Mapper response shape: {ipc_section, bns_section, title, notes}
-- Search response shape: list of {case_name, court, year, ipc_sections, snippet}
-  (post-threshold: may be shorter than requested n_results, including empty)
+- Search response shape: list of {case_name, court, year, ipc_sections, snippet,
+  matched_methods, matched_terms, relevance_label}, one entry per case, no
+  chunk_text. May be shorter than requested n_results, including empty, when
+  fewer cases match (dense: 0.65 threshold; bm25: no query word in the corpus)
 - QA endpoint is POST /ask (not GET — question text as a JSON body, not a
   URL query param), request body: {question: string, n_results?: number}
 - QA response shape: {answer, verified, sources_used, unverified_citations,
@@ -849,8 +870,8 @@ prevents it from being accidentally re-added.
   call.
 
 ## Audit findings (verified 2026-11-25) — fixes tracked in ROADMAP.md
-- QA context is truncated: search_judgments() returns snippet = first 200 chars of a ~2,800-char chunk (~7%), and qa.py build_prompt feeds that snippet to Gemini. The 13-question QA eval ran on truncated context and must be re-run after the fix.
-- Retrieval comparison is not like for like: the dense eval takes 10 chunks, which collapse to fewer unique cases after dedup and the 0.65 threshold, while bm25_search returns 10 unique cases. BM25 numbers reproduce offline (P@5 0.413, R@5 0.548, MRR 0.733). Re-run all methods at case level with equal candidate depth.
+- QA context is truncated: search_judgments() returns snippet = first 200 chars of a ~2,800-char chunk (~7%), and qa.py build_prompt feeds that snippet to Gemini. The 13-question QA eval ran on truncated context and must be re-run after the fix. RESOLVED in step 2: `context_mode="full"` (default) sends full `chunk_text` to Gemini; the QA v2 re-run is quota_exhausted with 6 calls remaining.
+- Retrieval comparison is not like for like: the dense eval takes 10 chunks, which collapse to fewer unique cases after dedup and the 0.65 threshold, while bm25_search returns 10 unique cases. BM25 numbers reproduce offline (P@5 0.413, R@5 0.548, MRR 0.733). Re-run all methods at case level with equal candidate depth. RESOLVED in step 2: `evaluate_retrieval_fair.py` compares all methods at 100 chunks with case-level collapse.
 - /ask and /search still use dense MiniLM as primary retriever; BM25 only feeds the explainability badge. RESOLVED in step 2b: both now follow `RETRIEVER` (default bm25).
 - The IPC-BNS mapper (18 rows) is a standalone lookup, not used in retrieval or QA.
 - Corpus: 48 judgments, all Supreme Court, 1949-2002. IPC 302 x41, 304 x9, 300 x4, 299 x2, 301 x1; IPC 96-105 appear in one judgment total; 106 has none. UI "Corpus scope" text overstates private-defence coverage.
@@ -888,9 +909,11 @@ prevents it from being accidentally re-added.
 - `search.retrieve_chunks(query, n_chunks, retriever=None, distance_threshold=0.65)` dispatches on the setting. bm25: `bm25_search_chunks` with `explainability.STOPWORDS` removed from the query, chunks scoring above `BM25_MIN_SCORE`, no distance threshold. dense: `search_judgments` with the 0.65 threshold. hybrid: 1:1 weighted RRF (k=60) of both, one record per case.
 - `search.retrieve_cases(query, n_cases)` over-fetches `CASE_OVERFETCH_CHUNKS` (50) chunks, collapses to unique cases and keeps the best chunk of each top case.
 - GET /search returns the top `n_results` cases. It still strips `chunk_text` (and the internal `score`/`rrf_score`). The badge methods and label are computed as before (`bm25_search(q, 15)` vs `search_judgments(q, n_results)`, independent of `RETRIEVER`); the exception fallback names the active retriever. `matched_terms` is computed from the full `chunk_text` before it is stripped (see the explainability section).
-- POST /ask: `ask_question()` sends the best chunk of each of the top `n_results` cases (`AskRequest.n_results` default 5) to Gemini with full `chunk_text`. Prompt and citation verifier are unchanged. The frontend currently sends `n_results: 10` (QA_RESULT_LIMIT in QuestionPage.jsx), so the live app uses 10 cases until that changes.
+- POST /ask: `ask_question()` sends the best chunk of each of the top `n_results` cases (`AskRequest.n_results` default 5) to Gemini with full `chunk_text`. Prompt and citation verifier are unchanged. The frontend sends `n_results: 5` (QA_RESULT_LIMIT in frontend/src/components/QuestionPage.jsx, changed from 10 in b757ef6), so the live app uses 5 cases.
+- RETRIEVER covers /search and /ask only. documents.py (similar-document search, counter-argument finder) still calls dense search_judgments().
 - `backend/eval/check_production_retriever.py` (run with `RETRIEVER=bm25` and `RETRIEVER=dense`) checks the production path at the fair-eval setup (100 chunks, dense threshold off) against `results/fair_retrieval.json` and exits 1 on mismatch. Verified: bm25 0.440/0.563/0.756 (matches `BM25 + stopwords`), dense 0.307/0.494/0.595 (matches MiniLM). Production defaults (50-chunk over-fetch, top 5 cases): bm25 0.440/0.563/0.756, dense 0.307/0.494/0.577. The former 5-chunk default gave bm25 0.293/0.438/0.733 and dense 0.293/0.460/0.563.
 - BM25 has no relevance cutoff at the default `BM25_MIN_SCORE=0`. Gibberish returns nothing (no token in the vocabulary), but every out-of-corpus QA question still returns 5 cases with top-1 scores of 8.3-15.3, against 14.1-29.7 for labeled queries. The ranges overlap (the GST question scores 15.3), so no single threshold separates them; /ask relies on Gemini declining. The old dense "no relevant judgments" empty path now triggers only for queries with no vocabulary match.
 - Tests: `backend/tests/test_retriever.py` (monkeypatched; no Gemini, ChromaDB or model downloads).
 - Open issue: BM25 has no out-of-corpus cutoff; /ask relies on Gemini declining. To test after quota reset.
 - Open item: SearchPage.jsx could show a 'Matched terms' line; the highlight only covers the 200-char snippet.
+- Open item: Decide whether documents.py features should follow RETRIEVER.
