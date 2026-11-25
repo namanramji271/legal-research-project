@@ -65,7 +65,11 @@ def _snippet(document: str, length: int = 200) -> str:
     return f"{compact_document[: length - 3]}..."
 
 
-def search_judgments(query: str, n_results: int = 5) -> list[dict[str, Any]]:
+def search_judgments(
+    query: str,
+    n_results: int = 5,
+    distance_threshold: float | None = SEARCH_DISTANCE_THRESHOLD,
+) -> list[dict[str, Any]]:
     """Return flat, frontend-ready records for the closest judgment chunks."""
     if not query.strip():
         raise ValueError("query must not be empty")
@@ -79,11 +83,13 @@ def search_judgments(query: str, n_results: int = 5) -> list[dict[str, Any]]:
     documents = (raw_results.get("documents") or [[]])[0] or []
     metadatas = (raw_results.get("metadatas") or [[]])[0] or []
     distances = (raw_results.get("distances") or [[]])[0] or []
-    relevant_results = [
-        (document, metadata, distance)
-        for document, metadata, distance in zip(documents, metadatas, distances)
-        if distance is not None and distance <= SEARCH_DISTANCE_THRESHOLD
-    ]
+    relevant_results = []
+    for document, metadata, distance in zip(documents, metadatas, distances):
+        if distance_threshold is not None and (
+            distance is None or distance > distance_threshold
+        ):
+            continue
+        relevant_results.append((document, metadata, distance))
 
     results: list[dict[str, Any]] = []
     for document, metadata, _distance in relevant_results:
@@ -95,12 +101,17 @@ def search_judgments(query: str, n_results: int = 5) -> list[dict[str, Any]]:
                 "year": metadata.get("year"),
                 "ipc_sections": _ipc_sections(metadata.get("ipc_sections")),
                 "snippet": _snippet(document or ""),
+                "chunk_text": document or "",
             }
         )
     return results
 
 
-def search_judgments_bge(query: str, n_results: int = 5) -> list[dict[str, Any]]:
+def search_judgments_bge(
+    query: str,
+    n_results: int = 5,
+    distance_threshold: float | None = SEARCH_DISTANCE_THRESHOLD,
+) -> list[dict[str, Any]]:
     """Return flat, frontend-ready records from the BGE-M3 judgment collection."""
     if not query.strip():
         raise ValueError("query must not be empty")
@@ -114,11 +125,13 @@ def search_judgments_bge(query: str, n_results: int = 5) -> list[dict[str, Any]]
     documents = (raw_results.get("documents") or [[]])[0] or []
     metadatas = (raw_results.get("metadatas") or [[]])[0] or []
     distances = (raw_results.get("distances") or [[]])[0] or []
-    relevant_results = [
-        (document, metadata, distance)
-        for document, metadata, distance in zip(documents, metadatas, distances)
-        if distance is not None and distance <= SEARCH_DISTANCE_THRESHOLD
-    ]
+    relevant_results = []
+    for document, metadata, distance in zip(documents, metadatas, distances):
+        if distance_threshold is not None and (
+            distance is None or distance > distance_threshold
+        ):
+            continue
+        relevant_results.append((document, metadata, distance))
 
     results: list[dict[str, Any]] = []
     for document, metadata, _distance in relevant_results:
@@ -130,6 +143,7 @@ def search_judgments_bge(query: str, n_results: int = 5) -> list[dict[str, Any]]
                 "year": metadata.get("year"),
                 "ipc_sections": _ipc_sections(metadata.get("ipc_sections")),
                 "snippet": _snippet(document or ""),
+                "chunk_text": document or "",
             }
         )
     return results
@@ -173,4 +187,7 @@ def search(
             result.setdefault("matched_terms", [])
             result.setdefault("relevance_label", "Moderate match")
 
-    return results
+    return [
+        {key: value for key, value in result.items() if key != "chunk_text"}
+        for result in results
+    ]

@@ -100,8 +100,47 @@ def bm25_search(query: str, n_results: int = 10) -> list[dict[str, Any]]:
                 "year": metadata.get("year"),
                 "ipc_sections": _ipc_sections(metadata.get("ipc_sections")),
                 "snippet": _snippet(judgment_index.documents[index]),
+                "chunk_text": judgment_index.documents[index],
             }
         )
         if len(results) == n_results:
+            break
+    return results
+
+
+def bm25_search_chunks(query: str, n_chunks: int = 100) -> list[dict[str, Any]]:
+    """Return positive-scoring BM25 chunks in rank order without case deduplication."""
+    if not query.strip():
+        raise ValueError("query must not be empty")
+    if n_chunks <= 0:
+        raise ValueError("n_chunks must be positive")
+
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+
+    judgment_index = get_bm25_index()
+    scores = judgment_index.index.get_scores(query_tokens)
+    ranked_indices = sorted(
+        range(len(scores)), key=lambda index: scores[index], reverse=True
+    )
+
+    results: list[dict[str, Any]] = []
+    for index in ranked_indices:
+        if scores[index] <= 0:
+            break
+        metadata = judgment_index.metadatas[index]
+        results.append(
+            {
+                "case_name": str(metadata.get("case_name", "")),
+                "court": metadata.get("court", ""),
+                "year": metadata.get("year"),
+                "ipc_sections": _ipc_sections(metadata.get("ipc_sections")),
+                "snippet": _snippet(judgment_index.documents[index]),
+                "chunk_text": judgment_index.documents[index],
+                "score": float(scores[index]),
+            }
+        )
+        if len(results) == n_chunks:
             break
     return results
