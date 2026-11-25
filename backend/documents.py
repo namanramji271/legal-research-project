@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import shutil
 import time
 from typing import Any
 from urllib.parse import unquote
@@ -27,7 +28,22 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 import pytesseract
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+_WINDOWS_TESSERACT_PATH = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+_configured_tesseract = os.environ.get("TESSERACT_CMD")
+_tesseract_command = (
+    _configured_tesseract
+    or shutil.which("tesseract")
+    or (str(_WINDOWS_TESSERACT_PATH) if _WINDOWS_TESSERACT_PATH.exists() else None)
+)
+_TESSERACT_AVAILABLE = bool(
+    _tesseract_command
+    and (
+        shutil.which(_tesseract_command)
+        or Path(_tesseract_command).is_file()
+    )
+)
+if _tesseract_command:
+    pytesseract.pytesseract.tesseract_cmd = _tesseract_command
 
 
 load_dotenv()
@@ -76,6 +92,15 @@ def _extract_image_text(file_bytes: bytes) -> str:
     printed/typed/scanned text (e.g. photographed FIRs, affidavits, 
     petitions, judgments) - handwriting recognition is NOT reliable 
     with Tesseract and is explicitly out of scope."""
+    if not _TESSERACT_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Tesseract OCR is unavailable. Install Tesseract or set "
+                "TESSERACT_CMD to its executable path."
+            ),
+        )
+
     try:
         image = Image.open(BytesIO(file_bytes))
         text = pytesseract.image_to_string(image)
