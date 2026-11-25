@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
+
+from bm25_search import _tokenize
 
 STOPWORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
@@ -24,8 +25,6 @@ STOPWORDS = {
     "yourselves",
 }
 
-TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
-
 
 def compute_match_explanation(
     query: str,
@@ -42,6 +41,9 @@ def compute_match_explanation(
     as the basis for treating cross-method agreement as a confidence signal.
     When both dense semantic search and BM25 lexical search surface the same
     case independently, it represents a high-confidence consensus match.
+
+    ``snippet`` is the text searched for matched terms; /search passes the
+    full chunk_text of the result.
     """
     in_dense = case_name in dense_case_names
     in_bm25 = case_name in bm25_case_names
@@ -59,15 +61,17 @@ def compute_match_explanation(
     else:
         relevance_label = "Weak match"
 
-    snippet_lower = snippet.lower()
+    # Whole-word matching with BM25's own tokenizer, so badge terms are the
+    # query terms BM25 could match in this text (not substrings like "act"
+    # inside "fact").
+    text_tokens = set(_tokenize(snippet))
     matched_terms: list[str] = []
     seen_terms: set[str] = set()
 
-    for match in TOKEN_PATTERN.finditer(query):
-        term = match.group().lower()
+    for term in _tokenize(query):
         if len(term) <= 1 or term in STOPWORDS:
             continue
-        if term not in seen_terms and term in snippet_lower:
+        if term not in seen_terms and term in text_tokens:
             seen_terms.add(term)
             matched_terms.append(term)
             if len(matched_terms) == 8:

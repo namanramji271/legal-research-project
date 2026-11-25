@@ -251,7 +251,8 @@ def search(
             explanation = compute_match_explanation(
                 query=q,
                 case_name=result.get("case_name", ""),
-                snippet=result.get("snippet", ""),
+                # Terms come from the full chunk; chunk_text is stripped below.
+                snippet=result.get("chunk_text") or result.get("snippet", ""),
                 dense_case_names=dense_case_names,
                 bm25_case_names=bm25_case_names,
             )

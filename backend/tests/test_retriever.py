@@ -330,3 +330,55 @@ def test_ask_with_no_retrieved_cases_skips_gemini(monkeypatch: pytest.MonkeyPatc
     response = qa.ask_question("xqzv blorf")
     assert response["verified"] is False
     assert response["sources_used"] == []
+
+
+# --- badge matched_terms ---------------------------------------------------
+
+
+def test_search_badge_terms_come_from_full_chunk_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_settings(monkeypatch, "bm25")
+    long_text = ("procedural history of the appeal " * 10) + "the dying declaration was recorded"
+    assert len(long_text.split("dying")[0]) > 200
+    result = _chunk("A", long_text)
+    assert "dying" not in result["snippet"]
+    monkeypatch.setattr(search, "retrieve_cases", lambda q, n: [result])
+    monkeypatch.setattr(search, "bm25_search", lambda q, n_results: [_chunk("A")])
+    monkeypatch.setattr(search, "search_judgments", lambda q, n_results: [_chunk("A")])
+
+    [response] = search.search(q="dying declaration", n_results=1, user=None)
+
+    assert response["matched_terms"] == ["dying", "declaration"]
+    assert "chunk_text" not in response
+    assert response["snippet"] == long_text[:200]
+
+
+def test_badge_terms_match_whole_words_only() -> None:
+    from explainability import compute_match_explanation
+
+    explanation = compute_match_explanation(
+        query="NDPS Act bail",
+        case_name="A",
+        snippet="In fact the exact facts show bail was refused.",
+        dense_case_names=[],
+        bm25_case_names=["A"],
+    )
+    assert explanation["matched_terms"] == ["bail"]
+
+
+def test_badge_terms_use_bm25_tokenizer() -> None:
+    from explainability import compute_match_explanation
+
+    explanation = compute_match_explanation(
+        query="Section 302, IPC; murder!",
+        case_name="A",
+        snippet="convicted under s.302 of the IPC for MURDER",
+        dense_case_names=["A"],
+        bm25_case_names=["A"],
+    )
+    expected = [
+        t for t in bm25_search._tokenize("Section 302, IPC; murder!")
+        if t in set(bm25_search._tokenize("convicted under s.302 of the IPC for MURDER"))
+        and t not in STOPWORDS
+    ]
+    assert explanation["matched_terms"] == expected == ["302", "ipc", "murder"]
+    assert explanation["relevance_label"] == "Strong match"
