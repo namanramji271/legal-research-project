@@ -13,6 +13,7 @@ import time
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from google import genai
+from google.genai import types
 from pydantic import BaseModel
 
 from search import search_judgments
@@ -70,13 +71,16 @@ def build_prompt(
     chunks: list[dict],
     persona: str | None = None,
     conversation_history: list[ConversationTurn] | None = None,
+    context_mode: str = "full",
 ) -> str:
+    if context_mode not in {"full", "snippet"}:
+        raise ValueError("context_mode must be 'full' or 'snippet'")
     context_blocks = []
     for i, chunk in enumerate(chunks, start=1):
         context_blocks.append(
             f"[Source {i}] Case: {chunk['case_name']} "
             f"({chunk['court']}, {chunk['year']}) — IPC: {chunk['ipc_sections']}\n"
-            f"{chunk['snippet']}"
+            f"{chunk.get('chunk_text', chunk.get('snippet', '')) if context_mode == 'full' else chunk.get('snippet', '')}"
         )
     context_text = "\n\n".join(context_blocks)
 
@@ -142,7 +146,11 @@ def _call_gemini_with_retry(prompt: str):
     last_error = None
     for attempt in range(2):
         try:
-            return client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            return client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0),
+            )
         except Exception as error:
             print(f"DEBUG /ask error (attempt {attempt}): {type(error).__name__}: {error}")
             last_error = error
@@ -171,6 +179,7 @@ def ask_question(
     n_results: int = 5,
     persona: str | None = None,
     conversation_history: list[ConversationTurn] | None = None,
+    context_mode: str = "full",
 ) -> dict:
     retrieval_query = _build_retrieval_query(question, conversation_history)
     chunks = search_judgments(retrieval_query, n_results=n_results)
@@ -183,7 +192,13 @@ def ask_question(
             "unverified_citations": [],
         }
 
-    prompt = build_prompt(question, chunks, persona=persona, conversation_history=conversation_history)
+    prompt = build_prompt(
+        question,
+        chunks,
+        persona=persona,
+        conversation_history=conversation_history,
+        context_mode=context_mode,
+    )
 
     response = _call_gemini_with_retry(prompt)
     answer_text = response.text

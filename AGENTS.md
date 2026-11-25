@@ -869,3 +869,11 @@ prevents it from being accidentally re-added.
 - Gemini free tier is about 20 requests/day and 5/minute: no live-LLM tests; use cached responses.
 - project_status_checklist.md is the historical Phase 1 tracker; ROADMAP.md is current.
 
+## Fair evaluation (ROADMAP step 2)
+- `search_judgments()` and `search_judgments_bge()` return both the unchanged 200-character `snippet` and full `chunk_text`. Their optional `distance_threshold` defaults to `SEARCH_DISTANCE_THRESHOLD` (0.65); pass `None` to disable filtering. The `/search` route strips `chunk_text` before returning its UI response.
+- `bm25_search()` also returns `chunk_text`; `bm25_search_chunks(query, n_chunks)` ranks positive-score chunks without case deduplication. Keep `/ask` and `/search` on their existing dense retriever unless the project owner explicitly changes that decision.
+- `qa.build_prompt()` and `qa.ask_question()` accept `context_mode="full"` by default. `full` passes complete chunk text to Gemini; `snippet` reproduces the former truncated prompt. The Gemini generation call uses temperature 0.
+- `backend/eval/metrics.py` owns case-level collapse, P@5, R@5, MRR, nDCG@5, Hit@5, weighted RRF (k=60), and paired bootstrap CIs. Its hand-computed tests live in `backend/tests/test_eval_metrics.py`; pytest is pinned in `backend/requirements-dev.txt`.
+- `backend/eval/evaluate_retrieval_fair.py` compares up to 100 chunks per method before case-level collapse, reports 95% bootstrap CIs and paired differences, and writes `fair_retrieval_findings.md` plus `results/fair_retrieval.json`. RRF weights are exploratory when measured on the same 15-query set. If `backend/data/chroma_db_bge` is missing, BGE-M3 is skipped with a warning.
+- `backend/eval/evaluate_qa_v2.py` compares snippet/full context using disk cache entries in `backend/eval/cache/`, keyed by SHA-256 of model name concatenated with prompt. The cache is gitignored, survives quota stops, and lets later runs resume. It paces uncached generations by 15 seconds by default and records results in `qa_v2_findings.md`.
+

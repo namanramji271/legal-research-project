@@ -2,3 +2,4 @@
 
 # Corpus regeneration from the gated IL-TUR/ILDC dataset.
 datasets==5.2.0
+pytest==8.4.2
