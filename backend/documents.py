@@ -28,6 +28,8 @@ from fastapi.responses import StreamingResponse
 from PIL import Image
 import pytesseract
 
+load_dotenv()
+
 _WINDOWS_TESSERACT_PATH = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 _configured_tesseract = os.environ.get("TESSERACT_CMD")
 _tesseract_command = (
@@ -45,8 +47,6 @@ _TESSERACT_AVAILABLE = bool(
 if _tesseract_command:
     pytesseract.pytesseract.tesseract_cmd = _tesseract_command
 
-
-load_dotenv()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:

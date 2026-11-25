@@ -6,7 +6,7 @@ It provides citation-backed question answering with a citation verification safe
 
 ## Requirements
 
-- Python 3.11 or newer
+- Python 3.13 (tested on 3.13.3; Python 3.15 currently fails because onnxruntime has no builds for it)
 - Node.js and npm
 - Tesseract OCR for image uploads (optional for PDF/TXT and other features)
 - A Gemini API key and a long random JWT secret for the backend
@@ -21,6 +21,13 @@ Create a Python virtual environment from the repository root.
 py -m venv backend/venv
 backend/venv/Scripts/Activate.ps1
 pip install -r backend/requirements.txt
+```
+
+PowerShell may block `Activate.ps1` under its execution policy. Git Bash users can
+activate the same environment with:
+
+```sh
+source backend/venv/Scripts/activate
 ```
 
 **macOS:**
@@ -44,7 +51,7 @@ Install frontend dependencies:
 
 ```sh
 cd frontend
-npm install
+npm ci
 ```
 
 ## Regenerate local data
@@ -68,7 +75,10 @@ python scripts/build_embeddings.py
 ```
 
 `build_corpus.py` writes `data/judgments.jsonl`; `build_embeddings.py` reads it
-and creates `data/chroma_db/`. Mapping data is sourced from
+and creates `data/chroma_db/`. The retrieval evaluations require this built index. The first
+model run downloads about 2.3 GB of models. The BGE-M3 comparison additionally
+requires `python scripts/build_embeddings_bge.py` from `backend/`; on CPU this
+takes about 40 minutes. Mapping data is sourced from
 `data/ipc_bns_mapping.csv`; `mapping.db` is generated automatically by the
 backend at startup.
 
@@ -89,6 +99,12 @@ npm run dev
 
 ## Evaluation
 
+Run the backend tests from the repository root:
+
+```sh
+pytest backend/tests
+```
+
 Run the offline retrieval evaluations from `backend/`:
 
 ```sh
@@ -104,3 +120,10 @@ only when you have quota available; it paces requests and records results in
 ```sh
 python eval/evaluate_qa.py
 ```
+
+## Retrieval settings
+
+`RETRIEVER` selects the production retriever for `/search` and `/ask`; it
+defaults to `bm25` and also accepts `dense` or `hybrid`. `BM25_MIN_SCORE` sets
+the minimum BM25 score when BM25 is active and defaults to `0`. See
+[`CLAUDE.md`](CLAUDE.md) for the retrieval configuration and behavior details.
