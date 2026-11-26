@@ -42,6 +42,15 @@ ANSWERS = {
 }
 
 
+class FakeServerError(Exception):
+    """Shaped like google.genai's ServerError: .code, .status and its message format."""
+
+    def __init__(self, code: int, status: str) -> None:
+        super().__init__(f"{code} {status}. {{'error': {{'code': {code}, 'status': '{status}'}}}}")
+        self.code = code
+        self.status = status
+
+
 class FakeQuotaError(Exception):
     """Shaped like google.genai's ClientError for a 429."""
 
@@ -68,10 +77,16 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
         ]
 
     calls: list[str] = []
-    state = SimpleNamespace(fail_on_call=None, error=None)
+    # queue: per-attempt outcomes (an exception to raise, or None for success), used first.
+    state = SimpleNamespace(fail_on_call=None, error=None, queue=[])
 
     def fake_generate(prompt: str):
         calls.append(prompt)
+        if state.queue:
+            outcome = state.queue.pop(0)
+            if outcome is not None:
+                raise outcome
+            return SimpleNamespace(text=ANSWERS[_question_in(prompt)])
         if state.fail_on_call is not None and len(calls) >= state.fail_on_call:
             raise state.error
         return SimpleNamespace(text=ANSWERS[_question_in(prompt)])
@@ -178,9 +193,11 @@ def test_quota_error_stops_at_once_without_retry_and_resumes(env: SimpleNamespac
         "status": 429,
         "message": "429 RESOURCE_EXHAUSTED. Quota exceeded for generate_content.",
         "quota": True,
+        "kind": "quota",
         "question_number": 4,
+        "transient_retries": 0,
     }
-    assert "Stopped at Q4: `FakeQuotaError` (status 429): 429 RESOURCE_EXHAUSTED" in (
+    assert "Stopped at Q4 (quota error, after 0 transient retries): `FakeQuotaError` (status 429): 429 RESOURCE_EXHAUSTED" in (
         env.findings_path.read_text(encoding="utf-8")
     )
     assert "Q04: stopped (quota_exhausted): FakeQuotaError 429: 429 RESOURCE_EXHAUSTED" in " ".join(env.lines)
@@ -238,3 +255,131 @@ def test_pacing_waits_between_uncached_calls(env: SimpleNamespace) -> None:
              cache_dir=env.cache_dir, results_path=env.results_path, findings_path=env.findings_path)
     assert len(env.calls) == 2
     assert len(env.sleeps) == 1 and 14 < env.sleeps[0] <= 15
+
+
+# --- Timeout, transient retries and progress lines ---------------------------
+
+
+def test_classify_error() -> None:
+    import httpx
+
+    assert prod.classify_error(FakeQuotaError()) == "quota"
+    assert prod.classify_error(FakeServerError(503, "UNAVAILABLE")) == "transient"
+    assert prod.classify_error(FakeServerError(504, "DEADLINE_EXCEEDED")) == "transient"
+    assert prod.classify_error(httpx.ReadTimeout("timed out")) == "transient"
+    assert prod.classify_error(FakeServerError(500, "INTERNAL")) == "other"
+    assert prod.classify_error(ValueError("bad")) == "other"
+
+
+def test_gemini_request_has_60s_timeout_and_production_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def generate_content(**kwargs: Any):
+        seen.update(kwargs)
+        return SimpleNamespace(text="ok")
+
+    monkeypatch.setattr(qa, "client", SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
+    prod.gemini_generate("prompt")
+    assert seen["model"] == qa.MODEL_NAME and seen["contents"] == "prompt"
+    assert seen["config"].temperature == 0
+    assert seen["config"].http_options.timeout == 60_000
+    assert seen["config"].http_options.retry_options is None  # no hidden SDK retries
+
+
+def test_503_is_retried_after_backoff_and_counted(env: SimpleNamespace) -> None:
+    env.state.queue = [FakeServerError(503, "UNAVAILABLE"), None]
+
+    report = env.run(only="unanswerable")
+
+    assert report["status"] == "complete"
+    assert len(env.calls) == 3  # Q2: fail + success; Q4: success
+    assert env.sleeps == [30.0]
+    assert report["transient_retries_total"] == 1
+    saved = json.loads(env.results_path.read_text(encoding="utf-8"))
+    assert [r["transient_retries"] for r in saved["results"]] == [1, 0]
+    findings = env.findings_path.read_text(encoding="utf-8")
+    assert "- Transient retries (503/504/timeout): 1 (request timeout 60s, backoff 30s, max 3 per call)" in findings
+    assert "| 2 | unanswerable | True | True | True | 1 |" in findings
+
+
+def test_504_exhausts_retries_then_stops_with_real_error(env: SimpleNamespace) -> None:
+    env.state.queue = [FakeServerError(504, "DEADLINE_EXCEEDED")] * 4
+
+    report = env.run()
+
+    assert len(env.calls) == 4  # 1 attempt + 3 retries, then stop
+    assert env.sleeps == [30.0, 30.0, 30.0]
+    assert report["status"] == "stopped_on_error"
+    assert report["questions_completed"] == 0
+    assert report["transient_retries_total"] == 3
+    assert report["error"]["kind"] == "transient"
+    assert report["error"]["type"] == "FakeServerError"
+    assert report["error"]["status"] == 504
+    assert report["error"]["message"].startswith("504 DEADLINE_EXCEEDED.")
+    assert report["error"]["transient_retries"] == 3
+    assert "Stopped at Q2 (transient error, after 3 transient retries): `FakeServerError` (status 504)" in (
+        env.findings_path.read_text(encoding="utf-8")
+    )
+    assert any("transient retries exhausted (3), stopping" in line for line in env.lines)
+
+
+def test_our_own_timeout_is_transient(env: SimpleNamespace) -> None:
+    import httpx
+
+    env.state.queue = [httpx.ReadTimeout("The read operation timed out"), None]
+
+    report = env.run(only="unanswerable")
+
+    assert report["status"] == "complete"
+    assert report["transient_retries_total"] == 1
+    assert env.sleeps == [30.0]
+
+
+def test_backoff_and_max_retries_are_configurable(env: SimpleNamespace) -> None:
+    env.state.queue = [FakeServerError(503, "UNAVAILABLE")] * 2
+
+    report = env.run(backoff_seconds=5, max_transient_retries=1)
+
+    assert len(env.calls) == 2
+    assert env.sleeps == [5]
+    assert report["status"] == "stopped_on_error"
+    assert report["backoff_seconds"] == 5 and report["max_transient_retries"] == 1
+
+
+def test_quota_after_transient_still_stops_without_retry(env: SimpleNamespace) -> None:
+    env.state.queue = [FakeServerError(503, "UNAVAILABLE"), FakeQuotaError()]
+
+    report = env.run()
+
+    assert len(env.calls) == 2
+    assert env.sleeps == [30.0]  # only the transient backoff
+    assert report["status"] == "quota_exhausted"
+    assert report["error"]["kind"] == "quota" and report["error"]["transient_retries"] == 1
+
+
+def test_progress_lines_show_attempts_and_elapsed_seconds(env: SimpleNamespace) -> None:
+    ticks = iter(float(i) * 1.5 for i in range(1000))
+    env.state.queue = [FakeServerError(503, "UNAVAILABLE"), None]
+
+    env.run(only="unanswerable", clock=lambda: next(ticks))
+    q2 = [line for line in env.lines if line.startswith("Q02: ")]
+
+    assert q2[0] == "Q02: Gemini call start (attempt 1)"
+    assert q2[1].startswith("Q02: FakeServerError 503: 503 UNAVAILABLE.")
+    assert q2[1].endswith("after 1.5s; transient, retrying in 30s (retry 1/3)")
+    assert q2[2] == "Q02: Gemini call start (attempt 2)"
+    assert q2[3] == "Q02: Gemini returned in 1.5s"
+
+    env.lines.clear()
+    env.run(only="unanswerable")
+    assert "Q02: cached answer" in env.lines
+
+
+def test_cli_options_reach_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(prod, "run", lambda questions, **kwargs: seen.update(kwargs) or {"status": "dry_run"})
+
+    assert prod.main(["--dry-run", "--backoff-seconds", "5", "--max-transient-retries", "1"]) == 0
+    assert seen["backoff_seconds"] == 5 and seen["max_transient_retries"] == 1 and seen["dry_run"] is True
+    assert prod.main([]) == 0
+    assert seen["backoff_seconds"] == 30 and seen["max_transient_retries"] == 3
