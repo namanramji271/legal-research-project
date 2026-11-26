@@ -209,8 +209,11 @@ def download_all(records: list[dict[str, Any]], work_dir: Path, workers: int = D
             if i % 100 == 0 or i == len(futures):
                 out(f"download {i}/{len(futures)}: {dict(counts)} {fetched_bytes / 1e6:.0f} MB")
     except KeyboardInterrupt:
-        executor.shutdown(wait=False, cancel_futures=True)
-        out("Interrupted: finished downloads are kept; rerun to resume.")
+        out("Interrupted: cancelling queued downloads, letting in-flight ones finish...")
+        # Wait for in-flight downloads (at most `workers`, each bounded by the timeout)
+        # so the manifest and pdf/ are consistent when this returns.
+        executor.shutdown(wait=True, cancel_futures=True)
+        out("Finished downloads are kept; rerun to resume.")
         raise
     executor.shutdown(wait=True)
     seconds = time.monotonic() - started

@@ -150,8 +150,15 @@ def test_ctrl_c_keeps_finished_downloads_and_rerun_resumes(tmp_path: Path) -> No
     with pytest.raises(KeyboardInterrupt):
         pp.download_all(rs, tmp_path, workers=1, opener=opener, sleep=lambda s: None, out=lambda _: None)
     assert pp.pdf_path(tmp_path, rs[0]["doc_id"]).is_file()
-    resumed = pp.download_all(rs, tmp_path, workers=1, opener=FakeOpener(), sleep=lambda s: None, out=lambda _: None)
-    assert resumed["counts"]["skipped"] == 1 and resumed["counts"]["ok"] == 2
+    # The worker thread may finish one more queued document before the queue is
+    # cancelled, so 1 or 2 are done. The rerun must complete the rest and never
+    # re-download a finished file.
+    done = {r["doc_id"] for r in rs if pp.pdf_path(tmp_path, r["doc_id"]).is_file()}
+    second = FakeOpener()
+    resumed = pp.download_all(rs, tmp_path, workers=1, opener=second, sleep=lambda s: None, out=lambda _: None)
+    assert resumed["counts"].get("skipped", 0) == len(done) >= 1
+    assert resumed["counts"]["ok"] == 3 - len(done) == len(second.calls)
+    assert not {u.rsplit("/", 1)[1] for u in second.calls} & {f"{r['pdf_url'].rsplit('/', 1)[1]}" for r in rs if r["doc_id"] in done}
 
 
 # --- extraction ---------------------------------------------------------------
