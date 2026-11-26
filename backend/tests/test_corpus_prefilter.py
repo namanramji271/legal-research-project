@@ -227,3 +227,25 @@ def test_lowercase_act_is_not_a_code(excerpt: str, sections: list[str]) -> None:
 )
 def test_real_census_cases(excerpt: str, sections: list[str]) -> None:
     assert in_scope_sections(excerpt) == sections
+
+
+def test_sampler_include_keeps_earlier_sample_and_grows(tmp_path: Path) -> None:
+    records = _non_candidates(tmp_path)
+    small = sample_noncandidates.stratified_sample(records, 8, seed=5)
+    big = sample_noncandidates.stratified_sample(records, 40, seed=5, include=[r["doc_id"] for r in small])
+    assert {r["doc_id"] for r in small} <= {r["doc_id"] for r in big}
+    assert len(big) == 40 and len({r["doc_id"] for r in big}) == 40
+    assert [sum(r["era"] == e for r in big) for e in sample_noncandidates.ERA_LABELS] == [10, 10, 10, 10]
+    with pytest.raises(ValueError, match="not in the pool"):
+        sample_noncandidates.stratified_sample(records, 10, seed=5, include=["nope"])
+
+
+def test_sampler_run_with_include_file(tmp_path: Path) -> None:
+    _non_candidates(tmp_path)
+    sample_noncandidates.run(tmp_path, n=8, seed=3, pool="criminal", out=lambda _: None)
+    earlier = tmp_path / "noncandidate_sample_criminal_seed3.json"
+    grown = sample_noncandidates.run(tmp_path, n=16, seed=3, pool="criminal", out=lambda _: None,
+                                     include_file=earlier)
+    saved = json.loads((tmp_path / "noncandidate_sample_criminal_seed3_n16.json").read_text(encoding="utf-8"))
+    assert saved["included_from"] == earlier.name and len(grown) == 16
+    assert json.loads(earlier.read_text(encoding="utf-8"))["n"] == 8  # earlier file untouched
