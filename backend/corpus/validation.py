@@ -8,17 +8,17 @@ body mentions, or a headnote mention plus at least 1 *explicit* body mention.
 
 The looser variant (``headnote_needs_explicit_body=False``: headnote mention
 plus any accepted body mention) is reported only as a sensitivity analysis
-on the same 50 documents. It is never used to choose the rule.
+on the same 55 documents. It is never used to choose the rule.
 
 Acceptance thresholds: Cohen's kappa >= 0.70 between the two annotators
 (document-level in scope / not in scope), weighted inclusion precision of
 the primary rule >= 0.90, headnote/body split accuracy >= 0.90. If the
 primary rule misses a threshold, the rule is changed and validated on a
-fresh 50 documents; the first 50 then count as development documents.
+fresh 55 documents; the first 55 then count as development documents.
 
 Sample design
 -------------
-50 documents from the extracted candidates, excluding corpus/dev_docs.json,
+55 documents from the extracted candidates, excluding corpus/dev_docs.json,
 in five disjoint strata. Each document is assigned to the first stratum it
 matches, in this priority order:
   weak_split (8)         any headnote/body split other than both markers
@@ -26,8 +26,10 @@ matches, in this priority order:
                          split_method none, delivered or jurisdiction only
   collision (10)         any IPC-range mention of 96-106 (accepted or rejected)
   rejected_flagged (10)  headnote pre-filter candidate the detector rejects
-  implicit_only (15)     in scope only through implicit body mentions
-  explicit (7)           in scope with an explicit body mention
+  implicit_only (12)     in scope only through implicit body mentions
+  explicit (15)          in scope with an explicit body mention
+The explicit stratum is about 70% of the in-scope population, so it carries
+most of the weight in the pooled estimate and gets the largest quota.
 Documents whose PDF failed (pdf_pipeline.excluded_ids: failed, missing,
 extraction_failed) are excluded, as are the development documents.
 The split rules are frozen: they are not tuned on candidate documents any
@@ -36,10 +38,10 @@ corpus/dev_docs.json.
 The sample is therefore NOT natural prevalence. Per-stratum metrics are
 primary; pooled estimates are weighted by stratum population (N_s / n_s).
 
-A separate 5-document calibration set (one per stratum, disjoint from the 50
+A separate 5-document calibration set (one per stratum, disjoint from the 55
 and from the dev documents) is labelled jointly first; it is not scored.
 
-Both annotators label the same 50 independently, blind to the detector
+Both annotators label the same 55 independently, blind to the detector
 output, following corpus/annotation_guideline.md.
 
 Usage (run only after the full extraction has finished):
@@ -73,7 +75,8 @@ from corpus.pdf_pipeline import excluded_ids, load_dev_ids, load_records  # noqa
 from corpus.prefilter import section_group  # noqa: E402
 
 STRATA = ("weak_split", "collision", "rejected_flagged", "implicit_only", "explicit")
-QUOTAS = {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 15, "explicit": 7}
+QUOTAS = {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 12, "explicit": 15}
+SAMPLE_SIZE = sum(QUOTAS.values())  # 55
 FULL_SPLITS = ("jurisdiction+delivered", "jurisdiction+heading")
 DEFAULT_SEED = 20261127
 ACCEPTANCE = {"kappa": 0.70, "weighted_precision": 0.90, "split_accuracy": 0.90}
@@ -116,7 +119,7 @@ def stratum(f: dict[str, Any]) -> str:
 
 
 def draw(pool: list[dict[str, Any]], seed: int, exclude: set[str]) -> tuple[list[dict], list[dict], dict[str, int]]:
-    """(sample of 50, calibration of 5, stratum population sizes). Seeded, order-independent."""
+    """(sample of SAMPLE_SIZE, calibration of 5, stratum population sizes). Seeded, order-independent."""
     rng = random.Random(seed)
     eligible = sorted((f for f in pool if f["doc_id"] not in exclude), key=lambda f: f["doc_id"])
     by_stratum = {s: [f for f in eligible if f["stratum"] == s] for s in STRATA}
@@ -368,7 +371,7 @@ def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
         split_accuracy=result["split"]["accuracy"], split_per_stratum=json.dumps(result["split"]["per_stratum"]),
         unsure=primary["unsure_excluded"],
         checks=json.dumps(result["checks"]), verdict="ACCEPTED" if result["accepted"] else
-        "NOT ACCEPTED: change the rule and validate on a fresh 50 (these 50 become development documents)",
+        f"NOT ACCEPTED: change the rule and validate on a fresh {SAMPLE_SIZE} (these {SAMPLE_SIZE} become development documents)",
     )
 
 
@@ -377,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, default=sc_source.DEFAULT_WORK_DIR)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("summary", help="aggregate detector counts over all candidates (no per-document output)")
-    sheet = sub.add_parser("sheet", help="draw the 50 + 5 and write blind sheets")
+    sheet = sub.add_parser("sheet", help=f"draw the {SAMPLE_SIZE} + 5 and write blind sheets")
     sheet.add_argument("--seed", type=int, default=DEFAULT_SEED)
     scoring = sub.add_parser("score", help="agreement and detector metrics from labelled sheets")
     for flag in ("--a", "--b", "--adjudicated"):

@@ -52,7 +52,7 @@ def test_draw_quotas_calibration_disjoint_dev_excluded_and_seeded() -> None:
     items = pool()
     dev = {"explicit_00", "collision_03"}
     sample, calibration, population = v.draw(items, seed=7, exclude=dev)
-    assert len(sample) == 50 and len(calibration) == 5
+    assert len(sample) == v.SAMPLE_SIZE == 55 and len(calibration) == 5
     assert {s: sum(i["stratum"] == s for i in sample) for s in v.STRATA} == v.QUOTAS
     assert sorted(i["stratum"] for i in calibration) == sorted(v.STRATA)
     ids = {i["doc_id"] for i in sample}
@@ -65,7 +65,7 @@ def test_draw_quotas_calibration_disjoint_dev_excluded_and_seeded() -> None:
 def test_make_sheets_end_to_end_blind(tmp_path: Path) -> None:
     candidates, n = [], 0
     for kind in BODIES:
-        for i in range(16):
+        for i in range(20):
             doc_id = f"{kind}_{i:02d}"
             candidates.append({"doc_id": doc_id, "year": 1975, "title": f"T {doc_id}", "citation": "C"})
             path = tmp_path / "text" / f"{doc_id}.json"
@@ -81,7 +81,7 @@ def test_make_sheets_end_to_end_blind(tmp_path: Path) -> None:
     out = tmp_path / "validation"
     rows_a = list(csv.DictReader((out / "validation_sheet_A.csv").open(encoding="utf-8")))
     rows_b = list(csv.DictReader((out / "validation_sheet_B.csv").open(encoding="utf-8")))
-    assert rows_a == rows_b and len(rows_a) == 50
+    assert rows_a == rows_b and len(rows_a) == 55
     assert tuple(rows_a[0]) == v.SHEET_COLUMNS
     assert all(r["in_scope"] == "" and "stratum" not in r for r in rows_a)  # blind and empty
     assert "explicit_00" not in {r["doc_id"] for r in rows_a}
@@ -148,7 +148,7 @@ def test_score_and_report_end_to_end(tmp_path: Path) -> None:
     assert result["checks"] == {"kappa": False, "weighted_precision": True, "split_accuracy": True}
     report = v.render_report(result, key)
     assert "Pre-registered rule" in report and "not used to choose the rule" in report
-    assert "NOT ACCEPTED" in report and "fresh 50" in report
+    assert "NOT ACCEPTED" in report and "fresh 55" in report
 
 
 def test_read_labels_validates_values(tmp_path: Path) -> None:
@@ -158,11 +158,11 @@ def test_read_labels_validates_values(tmp_path: Path) -> None:
 
 
 def test_quotas_and_failed_pdfs_are_excluded(tmp_path: Path) -> None:
-    assert v.QUOTAS == {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 15, "explicit": 7}
-    assert sum(v.QUOTAS.values()) == 50
+    assert v.QUOTAS == {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 12, "explicit": 15}
+    assert sum(v.QUOTAS.values()) == 55
     candidates = []
     for kind in BODIES:
-        for i in range(16):
+        for i in range(20):
             doc_id = f"{kind}_{i:02d}"
             candidates.append({"doc_id": doc_id, "year": 1975})
             path = tmp_path / "text" / f"{doc_id}.json"
@@ -177,7 +177,7 @@ def test_quotas_and_failed_pdfs_are_excluded(tmp_path: Path) -> None:
     key = v.make_sheets(tmp_path, seed=3, dev_path=dev, out=lambda _: None)
     drawn = {i["doc_id"] for i in key["sample"] + key["calibration"]}
     assert "explicit_01" not in drawn and key["excluded_failed_pdfs"] == ["explicit_01"]
-    assert key["population"]["explicit"] == 15
+    assert key["population"]["explicit"] == 19
 
 
 def test_pool_summary_aggregates_only(tmp_path: Path) -> None:

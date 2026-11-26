@@ -9,12 +9,12 @@ correct. Two annotators label the same documents independently.
 1. Label the 5-document **calibration sheet** together, discuss every
    disagreement, and settle how you read this guideline. Calibration labels
    are not scored.
-2. Then label the 50-document **validation sheet on your own**. Do not
+2. Then label the 55-document **validation sheet on your own**. Do not
    discuss items until both sheets are finished.
 3. Read the PDF at `pdf_url`. You are not shown any detector output; do not
    look for it (`validation_key.json` is not for annotators).
 4. The inclusion rule was fixed before labelling (see `validation.py`);
-   nothing you label changes it for these 50 documents.
+   nothing you label changes it for these 55 documents.
 
 ## Scope
 
