@@ -1,0 +1,265 @@
+{
+ "description": "Development documents: inspected while designing or tuning corpus v2 rules. Excluded from the hand-validation sample (50), the calibration set (5) and any reported evaluation of those rules.",
+ "documents": [
+  {
+   "doc_id": "1965_3_194_200",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1970_3_423_439",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1971_1_943_948",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1973_3_57_62",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1978_2_788_792",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1992_1_466_471",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "S_1996_3_296_309",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1999_2_89_98",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "S_2001_3_279_291",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "S_2006_4_536_549",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "2007_8_757_762",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "2008_7_1000_1024",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "2021_8_297_313",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "2024_6_164_213",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "2026_3_314_334",
+   "reason": "prefilter rule tuning: headnote excerpt inspected (census spot check, 2026-11-26)"
+  },
+  {
+   "doc_id": "1975_3_82_90",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1976_1_598_601",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1975_3_885_908",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1976_2_1_10",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1976_1_757_769",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1975_1_561_574",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1975_1_409_421",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1975_2_622_628",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1995_2_377_378",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "S_1995_6_673_675",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1995_3_1056_1061",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1995_2_817_819",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "S_1995_2_629_636",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "S_1995_5_612_617",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1995_2_887_899",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1995_2_1190_1204",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_11_1098_1106",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_6_589_656",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_3_1106_1120",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_7_927_961",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_2_729_755",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_2_119_146",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2010_5_368_372",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_18_343_350",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_2_1146_1154",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_10_263_278",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_2_876_892",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_16_967_1001",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_17_765_801",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "2022_18_494_515",
+   "reason": "AWS pilot: full PDF text read for regex/probe design (2026-11-26)"
+  },
+  {
+   "doc_id": "1975_1_906_913",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1974_3_652_656",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1955_2_1196_1247",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1979_1_744_750",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "S_1962_2_726_733",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1960_2_646_670",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1969_3_228_235",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1971_3_914_928",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1979_2_94_108",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1967_2_727_731",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "S_1996_5_335_346",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "S_1996_5_273_285",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1995_3_200_206",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "1987_2_962_973",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2008_16_1013_1025",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2008_12_949_958",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2007_7_1085_1089",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2023_11_845_860",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2012_2_1164_1180",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2023_10_1139_1146",
+   "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  }
+ ]
+}
