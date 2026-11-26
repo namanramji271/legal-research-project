@@ -6,6 +6,8 @@ Rules:
 
 \- Commit per logical change. Never push without my approval.
 
+\- Run git branch --show-current before every commit; if it prints main, stop and create a branch first.
+
 \- Never touch .env or backend/data/.
 
 \- Verify with real output (pytest, eval scripts) before saying a task is done.
