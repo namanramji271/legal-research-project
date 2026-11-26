@@ -42,6 +42,26 @@ shown for reference only and are not population estimates.
 - Documents labelled "unsure" by adjudication, excluded from strict-label
   detector metrics: $unsure (loose label: $secondary_unsure)
 
+## Uncertainty
+
+Every figure is shown as `point [95% interval]`. Per-stratum proportions
+(and unweighted pooled and section-level figures) use the Wilson score
+interval. The weighted pooled precision/recall and the split accuracy use a
+stratified percentile bootstrap ($resamples resamples, seed $seed): each
+stratum is resampled with replacement at its own size, so the N_s / n_s
+weights stay fixed.
+
+**The pooled weighted estimate rests on few labels per stratum** ($min_quota–$max_quota
+documents each), and each stratum's weight is its population share, so a
+single label in a heavily weighted stratum moves the pooled figure a lot.
+Read the intervals before the point estimates. A bootstrap interval
+collapses to a point when no errors of that kind were observed in the
+sample (e.g. recall `1.0 [1.0, 1.0]` with no false negatives); that does not
+mean there is no uncertainty, so read the per-stratum Wilson intervals
+instead. Acceptance is still judged
+on the point estimates, as pre-registered; the intervals are not an
+acceptance criterion.
+
 ## Inter-annotator agreement
 
 - Strict `in_scope` (yes / no / unsure): κ **$kappa**, raw agreement $raw_agreement
@@ -54,7 +74,7 @@ $primary_table
 - Weighted pooled: $primary_weighted
 - Unweighted pooled (reference only): $primary_unweighted
 
-### Section level (unweighted; pairs of document × section)
+### Section level (unweighted; pairs of document × section; 95% Wilson)
 
 | Group | TP | FP | FN | Precision | Recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -74,8 +94,8 @@ $loose_table
 
 ## Headnote / body split
 
-- Accuracy over judged documents: **$split_accuracy**
-- Per stratum: $split_per_stratum
+- Accuracy over judged documents (unweighted share; 95% stratified bootstrap): **$split_accuracy**
+- Per stratum (95% Wilson): $split_per_stratum
 
 ## Acceptance
 

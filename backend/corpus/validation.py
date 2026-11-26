@@ -51,6 +51,12 @@ corpus/dev_docs.json.
 The sample is therefore NOT natural prevalence. Per-stratum metrics are
 primary; pooled estimates are weighted by stratum population (N_s / n_s).
 
+Uncertainty: per-stratum proportions carry 95% Wilson intervals; the
+weighted pooled precision/recall and the split accuracy carry a 95%
+stratified percentile bootstrap (10,000 resamples, seeded by the sample
+seed). Acceptance is judged on the point estimates; intervals are reported
+beside them, because the pooled estimate rests on 8-15 labels per stratum.
+
 A separate 5-document calibration set (one per stratum, disjoint from the 55
 and from the dev documents) is labelled jointly first; it is not scored.
 
@@ -69,6 +75,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import random
 import re
 import sys
@@ -93,6 +100,8 @@ SAMPLE_SIZE = sum(QUOTAS.values())  # 55
 FULL_SPLITS = ("jurisdiction+delivered", "jurisdiction+heading")
 DEFAULT_SEED = 20261127
 ACCEPTANCE = {"kappa": 0.70, "weighted_precision": 0.90, "split_accuracy": 0.90}
+Z95 = 1.959963984540054  # two-sided 95%
+BOOTSTRAP_RESAMPLES = 10_000
 TEMPLATE_PATH = Path(__file__).with_name("validation_report_template.md")
 
 SHEET_COLUMNS = (
@@ -297,6 +306,51 @@ def cohen_kappa(a: list[str], b: list[str]) -> float | None:
     return round((observed - expected) / (1 - expected), 4)
 
 
+# --- uncertainty --------------------------------------------------------------
+
+def wilson(k: int, n: int, z: float = Z95) -> list[float] | None:
+    """Wilson score interval for a proportion k/n; None when n == 0."""
+    if n == 0:
+        return None
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return [round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)]
+
+
+def _percentile(sorted_values: list[float], q: float) -> float:
+    """Linear-interpolation percentile of an already sorted list."""
+    pos = (len(sorted_values) - 1) * q
+    lo = math.floor(pos)
+    hi = min(lo + 1, len(sorted_values) - 1)
+    return sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * (pos - lo)
+
+
+def stratified_bootstrap(groups: dict[str, list], statistic: Callable[[dict[str, list]], dict[str, float | None]],
+                         seed: int, resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, dict[str, Any]]:
+    """Percentile 95% intervals for each named output of ``statistic``.
+
+    Each replicate resamples every stratum with replacement at its own size, so
+    the stratum sizes (and hence the N_s / n_s weights) stay fixed. Replicates
+    where an output is undefined (None) are dropped for that output and counted.
+    """
+    rng = random.Random(seed)
+    names = list(statistic(groups))
+    draws: dict[str, list[float]] = {name: [] for name in names}
+    for _ in range(resamples):
+        replicate = {s: rng.choices(m, k=len(m)) if m else [] for s, m in groups.items()}
+        for name, value in statistic(replicate).items():
+            if value is not None:
+                draws[name].append(value)
+    out = {}
+    for name in names:
+        values = sorted(draws[name])
+        ci = [round(_percentile(values, 0.025), 4), round(_percentile(values, 0.975), 4)] if values else None
+        out[name] = {"ci": ci, "undefined_replicates": resamples - len(values)}
+    return out
+
+
 def _prf(pairs: Iterable[tuple[bool, bool]]) -> dict[str, Any]:
     tp = fp = fn = tn = 0
     for predicted, actual in pairs:
@@ -306,7 +360,22 @@ def _prf(pairs: Iterable[tuple[bool, bool]]) -> dict[str, Any]:
         tn += not predicted and not actual
     return {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
             "precision": round(tp / (tp + fp), 4) if tp + fp else None,
-            "recall": round(tp / (tp + fn), 4) if tp + fn else None}
+            "precision_ci": wilson(tp, tp + fp),
+            "recall": round(tp / (tp + fn), 4) if tp + fn else None,
+            "recall_ci": wilson(tp, tp + fn)}
+
+
+def _weighted_pr(groups: dict[str, list[tuple[bool, bool]]], population: dict[str, int]) -> dict[str, float | None]:
+    """Population-weighted (N_s / n_s) pooled precision and recall over per-stratum (predicted, actual) pairs."""
+    tp = fp = fn = 0.0
+    for s, pairs in groups.items():
+        if not pairs:
+            continue
+        w = population.get(s, 0) / len(pairs)
+        tp += w * sum(p and a for p, a in pairs)
+        fp += w * sum(p and not a for p, a in pairs)
+        fn += w * sum(a and not p for p, a in pairs)
+    return {"precision": tp / (tp + fp) if tp + fp else None, "recall": tp / (tp + fn) if tp + fn else None}
 
 
 def gold_in_scope(label: dict[str, Any], view: str = "strict") -> bool | None:
@@ -319,28 +388,30 @@ def gold_in_scope(label: dict[str, Any], view: str = "strict") -> bool | None:
 
 
 def detector_metrics(items: list[dict[str, Any]], gold: dict[str, dict], population: dict[str, int],
-                     rule: str = "primary", label: str = "strict") -> dict[str, Any]:
+                     rule: str = "primary", label: str = "strict", seed: int = DEFAULT_SEED,
+                     resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
     """Per-stratum and weighted pooled document-level precision/recall; section-level by group.
 
     ``rule`` picks the detector rule (primary / loose sensitivity variant);
     ``label`` picks the gold standard (strict in_scope / loose with section_as_charge).
+    Per-stratum and unweighted figures carry Wilson intervals; the weighted
+    pooled figures carry a seeded stratified-bootstrap interval.
     """
     key = "primary_sections" if rule == "primary" else "loose_sections"
     truth = {i["doc_id"]: gold_in_scope(gold[i["doc_id"]], label) for i in items}
     scored = [i for i in items if truth[i["doc_id"]] is not None]
-    per_stratum = {}
-    weighted = Counter()
+    per_stratum, groups = {}, {}
     for s in STRATA:
         members = [i for i in scored if i["stratum"] == s]
-        pairs = [(bool(i[key]), truth[i["doc_id"]]) for i in members]
-        per_stratum[s] = {"n": len(members), **_prf(pairs)}
-        w = population.get(s, 0) / len(members) if members else 0.0
-        for k in ("tp", "fp", "fn", "tn"):
-            weighted[k] += w * per_stratum[s][k]
-    pooled_weighted = {
-        "precision": round(weighted["tp"] / (weighted["tp"] + weighted["fp"]), 4) if weighted["tp"] + weighted["fp"] else None,
-        "recall": round(weighted["tp"] / (weighted["tp"] + weighted["fn"]), 4) if weighted["tp"] + weighted["fn"] else None,
-    }
+        groups[s] = [(bool(i[key]), truth[i["doc_id"]]) for i in members]
+        per_stratum[s] = {"n": len(members), **_prf(groups[s])}
+    point = _weighted_pr(groups, population)
+    intervals = stratified_bootstrap(groups, lambda g: _weighted_pr(g, population), seed, resamples)
+    pooled_weighted = {}
+    for name in ("precision", "recall"):
+        pooled_weighted[name] = round(point[name], 4) if point[name] is not None else None
+        pooled_weighted[f"{name}_ci"] = intervals[name]["ci"]
+        pooled_weighted[f"{name}_undefined_replicates"] = intervals[name]["undefined_replicates"]
     sections = {}
     for group in ("private_defence", "299-301", "302", "303", "304"):
         pairs = []
@@ -355,16 +426,31 @@ def detector_metrics(items: list[dict[str, Any]], gold: dict[str, dict], populat
             "section_level_unweighted": sections}
 
 
-def split_accuracy(items: list[dict[str, Any]], gold: dict[str, dict]) -> dict[str, Any]:
+def _share(groups: dict[str, list[bool]]) -> dict[str, float | None]:
+    values = [x for v in groups.values() for x in v]
+    return {"accuracy": sum(values) / len(values) if values else None}
+
+
+def split_accuracy(items: list[dict[str, Any]], gold: dict[str, dict], seed: int = DEFAULT_SEED,
+                   resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """Unweighted share of judged splits that are correct (pre-registered statistic).
+
+    Interval: stratified bootstrap of that same unweighted share; per stratum: Wilson.
+    """
     judged = [i for i in items if gold[i["doc_id"]]["split_correct"] in ("yes", "no")]
     per = {s: [gold[i["doc_id"]]["split_correct"] == "yes" for i in judged if i["stratum"] == s] for s in STRATA}
-    overall = [gold[i["doc_id"]]["split_correct"] == "yes" for i in judged]
+    point = _share(per)["accuracy"]
+    boot = stratified_bootstrap(per, _share, seed, resamples)["accuracy"]
     return {"judged": len(judged),
-            "accuracy": round(sum(overall) / len(overall), 4) if overall else None,
-            "per_stratum": {s: (round(sum(v) / len(v), 4) if v else None) for s, v in per.items()}}
+            "accuracy": round(point, 4) if point is not None else None,
+            "accuracy_ci": boot["ci"],
+            "per_stratum": {s: (round(sum(v) / len(v), 4) if v else None) for s, v in per.items()},
+            "per_stratum_ci": {s: wilson(sum(v), len(v)) for s, v in per.items()}}
 
 
-def score(key: dict[str, Any], a: dict, b: dict, adjudicated: dict) -> dict[str, Any]:
+def score(key: dict[str, Any], a: dict, b: dict, adjudicated: dict,
+          resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """Agreement, detector and split metrics. Acceptance uses point estimates; intervals are reported beside them."""
     items = key["sample"]
     ids = [i["doc_id"] for i in items]
     missing = [d for d in ids if d not in a or d not in b or d not in adjudicated]
@@ -375,11 +461,11 @@ def score(key: dict[str, Any], a: dict, b: dict, adjudicated: dict) -> dict[str,
         xa, xb = [a[d][field] for d in ids], [b[d][field] for d in ids]
         agreement[field] = {"kappa": cohen_kappa(xa, xb),
                             "raw_agreement": round(sum(x == y for x, y in zip(xa, xb)) / len(ids), 4)}
-    pop = key["population"]
-    primary = detector_metrics(items, adjudicated, pop, "primary", "strict")
-    secondary = detector_metrics(items, adjudicated, pop, "primary", "loose")
-    sensitivity = detector_metrics(items, adjudicated, pop, "loose", "strict")
-    split = split_accuracy(items, adjudicated)
+    pop, seed = key["population"], key["seed"]
+    primary = detector_metrics(items, adjudicated, pop, "primary", "strict", seed, resamples)
+    secondary = detector_metrics(items, adjudicated, pop, "primary", "loose", seed, resamples)
+    sensitivity = detector_metrics(items, adjudicated, pop, "loose", "strict", seed, resamples)
+    split = split_accuracy(items, adjudicated, seed, resamples)
     kappa = agreement["in_scope"]["kappa"]
     checks = {
         "kappa": kappa is not None and kappa >= ACCEPTANCE["kappa"],
@@ -388,36 +474,70 @@ def score(key: dict[str, Any], a: dict, b: dict, adjudicated: dict) -> dict[str,
     }
     return {"agreement": agreement, "primary": primary, "secondary_loose_label": secondary,
             "sensitivity_loose_rule": sensitivity, "split": split,
-            "acceptance": ACCEPTANCE, "checks": checks, "accepted": all(checks.values())}
+            "intervals": {"confidence": 0.95, "per_stratum": "wilson", "pooled_and_split": "stratified percentile bootstrap",
+                          "bootstrap_resamples": resamples, "bootstrap_seed": seed},
+            "acceptance": ACCEPTANCE, "acceptance_on": "point estimates", "checks": checks,
+            "accepted": all(checks.values())}
+
+
+def _fmt(value: float | None, ci: list[float] | None) -> str:
+    """'0.93 [0.81, 0.98]'; 'n/a' when the figure is undefined."""
+    if value is None:
+        return "n/a"
+    return f"{value} [{ci[0]}, {ci[1]}]" if ci else str(value)
 
 
 def _table(metrics: dict[str, Any]) -> str:
-    lines = ["| Stratum | n | TP | FP | FN | TN | Precision | Recall |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    lines = ["| Stratum | n | TP | FP | FN | TN | Precision [95% Wilson] | Recall [95% Wilson] |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for s, m in metrics["per_stratum"].items():
-        lines.append(f"| {s} | {m['n']} | {m['tp']} | {m['fp']} | {m['fn']} | {m['tn']} | {m['precision']} | {m['recall']} |")
+        lines.append(f"| {s} | {m['n']} | {m['tp']} | {m['fp']} | {m['fn']} | {m['tn']} | "
+                     f"{_fmt(m['precision'], m['precision_ci'])} | {_fmt(m['recall'], m['recall_ci'])} |")
     return "\n".join(lines)
+
+
+def _weighted_line(metrics: dict[str, Any]) -> str:
+    w = metrics["pooled_weighted"]
+    parts = []
+    for name in ("precision", "recall"):
+        text = f"{name} {_fmt(w[name], w[f'{name}_ci'])}"
+        if w[f"{name}_undefined_replicates"]:
+            text += f" ({w[f'{name}_undefined_replicates']} undefined bootstrap replicates dropped)"
+        parts.append(text)
+    return "; ".join(parts) + " (95% stratified bootstrap)"
+
+
+def _unweighted_line(metrics: dict[str, Any]) -> str:
+    u = metrics["pooled_unweighted"]
+    return (f"precision {_fmt(u['precision'], u['precision_ci'])}; "
+            f"recall {_fmt(u['recall'], u['recall_ci'])} (95% Wilson)")
 
 
 def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
     primary, secondary = result["primary"], result["secondary_loose_label"]
     loose = result["sensitivity_loose_rule"]
-    agreement = result["agreement"]
+    agreement, split = result["agreement"], result["split"]
     sections = "\n".join(
-        f"| {g} | {m['tp']} | {m['fp']} | {m['fn']} | {m['precision']} | {m['recall']} |"
+        f"| {g} | {m['tp']} | {m['fp']} | {m['fn']} | {_fmt(m['precision'], m['precision_ci'])} | "
+        f"{_fmt(m['recall'], m['recall_ci'])} |"
         for g, m in primary["section_level_unweighted"].items()
     )
+    split_per_stratum = "; ".join(f"{s} {_fmt(split['per_stratum'][s], split['per_stratum_ci'][s])}"
+                                  for s in split["per_stratum"])
+    quotas = key["quotas"].values()
     return Template(TEMPLATE_PATH.read_text(encoding="utf-8")).substitute(
         seed=key["seed"], population=json.dumps(key["population"]), quotas=json.dumps(key["quotas"]),
+        min_quota=min(quotas), max_quota=max(quotas), resamples=result["intervals"]["bootstrap_resamples"],
         kappa=agreement["in_scope"]["kappa"], raw_agreement=agreement["in_scope"]["raw_agreement"],
         kappa_charge=agreement["section_as_charge"]["kappa"],
         raw_agreement_charge=agreement["section_as_charge"]["raw_agreement"],
-        primary_table=_table(primary), primary_weighted=json.dumps(primary["pooled_weighted"]),
-        primary_unweighted=json.dumps({k: primary["pooled_unweighted"][k] for k in ("precision", "recall")}),
+        primary_table=_table(primary), primary_weighted=_weighted_line(primary),
+        primary_unweighted=_unweighted_line(primary),
         section_table=sections,
-        secondary_table=_table(secondary), secondary_weighted=json.dumps(secondary["pooled_weighted"]),
+        secondary_table=_table(secondary), secondary_weighted=_weighted_line(secondary),
         secondary_unsure=secondary["unsure_excluded"],
-        loose_table=_table(loose), loose_weighted=json.dumps(loose["pooled_weighted"]),
-        split_accuracy=result["split"]["accuracy"], split_per_stratum=json.dumps(result["split"]["per_stratum"]),
+        loose_table=_table(loose), loose_weighted=_weighted_line(loose),
+        split_accuracy=_fmt(split["accuracy"], split["accuracy_ci"]), split_per_stratum=split_per_stratum,
         unsure=primary["unsure_excluded"],
         checks=json.dumps(result["checks"]), verdict="ACCEPTED" if result["accepted"] else
         f"NOT ACCEPTED: change the rule and validate on a fresh {SAMPLE_SIZE} (these {SAMPLE_SIZE} become development documents)",

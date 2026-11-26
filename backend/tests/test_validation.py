@@ -117,17 +117,19 @@ def test_metrics_per_stratum_weighted_and_sensitivity() -> None:
             "r2": {"in_scope": "unsure", "section_as_charge": "no", "sections": set(), "split_correct": "na"}}
     population = {"explicit": 100, "rejected_flagged": 10}
     m = v.detector_metrics(items, gold, population, "primary")
-    assert m["per_stratum"]["explicit"] == {"n": 2, "tp": 1, "fp": 1, "fn": 0, "tn": 0, "precision": 0.5, "recall": 1.0}
+    assert m["per_stratum"]["explicit"] == {"n": 2, "tp": 1, "fp": 1, "fn": 0, "tn": 0,
+                                            "precision": 0.5, "precision_ci": [0.0945, 0.9055],
+                                            "recall": 1.0, "recall_ci": [0.2065, 1.0]}
     assert m["per_stratum"]["rejected_flagged"]["fn"] == 1 and m["unsure_excluded"] == 1
     # weights: explicit 100/2 = 50, rejected 10/1 = 10 -> TP 50, FP 50, FN 10
-    assert m["pooled_weighted"] == {"precision": 0.5, "recall": round(50 / 60, 4)}
+    assert (m["pooled_weighted"]["precision"], m["pooled_weighted"]["recall"]) == (0.5, round(50 / 60, 4))
     assert m["section_level_unweighted"]["304"]["fn"] == 1
     loose = v.detector_metrics(items, gold, population, "loose")
     assert loose["per_stratum"]["rejected_flagged"]["tp"] == 1
     # Loose gold label: e2 (charge only) counts as in scope, so the explicit stratum is all TP.
     lab = v.detector_metrics(items, gold, population, "primary", label="loose")
     assert lab["label"] == "loose" and lab["per_stratum"]["explicit"]["precision"] == 1.0
-    assert lab["pooled_weighted"]["precision"] == 1.0
+    assert lab["pooled_weighted"]["precision"] == 1.0 and lab["pooled_weighted"]["precision_ci"] == [1.0, 1.0]
     assert v.split_accuracy(items, gold)["accuracy"] == round(2 / 3, 4)
 
 
@@ -154,6 +156,9 @@ def test_score_and_report_end_to_end(tmp_path: Path) -> None:
     report = v.render_report(result, key)
     assert "Pre-registered labels" in report and "not used to choose the rule" in report
     assert "against the loose label" in report and "section_as_charge" in report
+    assert "rests on few labels per stratum" in report and "8–15" in report
+    assert "1.0 [1.0, 1.0]" in report and "stratified bootstrap" in report
+    assert result["acceptance_on"] == "point estimates"
     assert "NOT ACCEPTED" in report and "fresh 55" in report
 
 
@@ -234,3 +239,44 @@ def test_pool_summary_aggregates_only(tmp_path: Path) -> None:
     assert summary["strata_eligible_excluding_dev"]["explicit"] == 2
     assert summary["in_scope_by_group_and_era"]["302"]["total"] == summary["in_scope_primary"]
     assert "doc_id" not in json.dumps(summary)
+
+
+def test_wilson_hand_computed() -> None:
+    assert v.wilson(1, 2) == [0.0945, 0.9055]
+    assert v.wilson(1, 1) == [0.2065, 1.0]
+    assert v.wilson(8, 10) == [0.4902, 0.9433]
+    assert v.wilson(0, 10) == [0.0, 0.2775]
+    assert v.wilson(0, 0) is None
+
+
+def test_stratified_bootstrap_seeded_fixed_weights_and_undefined() -> None:
+    population = {"explicit": 70, "implicit_only": 30}
+    stat = lambda g: v._weighted_pr(g, population)  # noqa: E731
+    mixed = {"explicit": [(True, True)] * 12 + [(True, False)] * 3,
+             "implicit_only": [(True, True)] * 10 + [(False, True)] * 2}
+    first = v.stratified_bootstrap(mixed, stat, seed=11, resamples=2000)
+    assert first == v.stratified_bootstrap(mixed, stat, seed=11, resamples=2000)
+    # weights 70/15 and 30/12: TP 56 + 25, FP 14 -> 81 / 95
+    point = stat(mixed)["precision"]
+    assert round(point, 4) == round(81 / 95, 4)
+    lo, hi = first["precision"]["ci"]
+    assert lo < point < hi and hi <= 1.0
+    # Homogeneous strata: every replicate equals the point, so weights really stay fixed.
+    pure = {"explicit": [(True, True)] * 15, "implicit_only": [(True, False)] * 12}
+    assert v.stratified_bootstrap(pure, stat, seed=1, resamples=200)["precision"]["ci"] == [0.7, 0.7]
+    # Undefined replicates are dropped and counted: precision is None when no draw is predicted positive.
+    sparse = {"explicit": [(True, True), (False, True)]}
+    out = v.stratified_bootstrap(sparse, stat, seed=3, resamples=400)
+    assert 0 < out["precision"]["undefined_replicates"] < 400
+    assert out["recall"]["undefined_replicates"] == 0
+
+
+def test_split_accuracy_intervals() -> None:
+    items = [{"doc_id": f"s{i}", "stratum": "weak_split" if i < 4 else "explicit"} for i in range(10)]
+    gold = {f"s{i}": {"split_correct": "no" if i in (0, 1) else "yes"} for i in range(10)}
+    out = v.split_accuracy(items, gold, seed=5, resamples=2000)
+    assert out["accuracy"] == 0.8
+    lo, hi = out["accuracy_ci"]
+    assert lo < 0.8 < hi
+    assert out["per_stratum"]["weak_split"] == 0.5 and out["per_stratum_ci"]["weak_split"] == v.wilson(2, 4)
+    assert out["per_stratum_ci"]["collision"] is None
