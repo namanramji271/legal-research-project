@@ -10,7 +10,6 @@ limit. Cached prompts are reused on every subsequent run.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -32,6 +31,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import qa  # noqa: E402
+from eval import qa_cache  # noqa: E402
 from eval.refusal_patterns import (  # noqa: E402
     is_insufficient_context as _is_insufficient_context,
 )
@@ -52,27 +52,14 @@ qa.retrieve_cases = _step2_dense_cases
 
 
 def _cache_key(prompt: str) -> str:
-    return hashlib.sha256(f"{qa.MODEL_NAME}{prompt}".encode("utf-8")).hexdigest()
+    return qa_cache.cache_key(qa.MODEL_NAME, prompt)
 
 
-def _cache_path(cache_key: str) -> Path:
-    return CACHE_DIR / f"{cache_key}.json"
+def _cache_path(key: str) -> Path:
+    return qa_cache.cache_path(key, CACHE_DIR)
 
 
-def _is_quota_error(error: BaseException) -> bool:
-    pending: BaseException | None = error
-    seen: set[int] = set()
-    while pending is not None and id(pending) not in seen:
-        seen.add(id(pending))
-        status = getattr(pending, "status_code", None) or getattr(pending, "code", None)
-        message = f"{pending} {getattr(pending, 'detail', '')}".lower()
-        if status == 429 or any(
-            marker in message
-            for marker in ("429", "quota", "resource_exhausted", "rate limit")
-        ):
-            return True
-        pending = pending.__cause__ or pending.__context__
-    return False
+_is_quota_error = qa_cache.is_quota_error
 
 
 def _prepare_tasks(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -192,14 +179,10 @@ def main() -> None:
     def cached_call(prompt: str):
         nonlocal api_calls, cache_hits, last_api_call_at
         key = _cache_key(prompt)
-        path = _cache_path(key)
-        if path.is_file():
-            try:
-                cached = json.loads(path.read_text(encoding="utf-8"))
-                cache_hits += 1
-                return SimpleNamespace(text=cached["answer"])
-            except (OSError, json.JSONDecodeError, KeyError, TypeError):
-                pass
+        cached_answer = qa_cache.read_cached_answer(key, CACHE_DIR)
+        if cached_answer is not None:
+            cache_hits += 1
+            return SimpleNamespace(text=cached_answer)
 
         if last_api_call_at is not None and args.delay_seconds:
             elapsed = time.monotonic() - last_api_call_at
@@ -209,17 +192,7 @@ def main() -> None:
         last_api_call_at = time.monotonic()
         response = original_call(prompt)
         answer = str(response.text or "")
-        temporary_path = path.with_suffix(".tmp")
-        temporary_path.write_text(
-            json.dumps(
-                {"model": qa.MODEL_NAME, "prompt_sha256": key, "answer": answer},
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        temporary_path.replace(path)
+        qa_cache.write_cached_answer(key, qa.MODEL_NAME, answer, CACHE_DIR)
         return response
 
     qa._call_gemini_with_retry = cached_call
