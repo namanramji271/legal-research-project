@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from auth import require_role
+import config
 from google import genai
 import pdfplumber
 from pydantic import BaseModel
@@ -60,8 +61,7 @@ MODEL_NAME = "gemini-3.6-flash"
 client = genai.Client(api_key=GEMINI_API_KEY)
 router = APIRouter()
 SUPPORTED_SUFFIXES = {".pdf", ".txt", ".jpg", ".jpeg", ".png"}
-DATA_DIR = Path(__file__).resolve().parent / "data"
-JUDGMENTS_FILE = DATA_DIR / "judgments.jsonl"
+# The judgments file follows CORPUS_VERSION: see _judgments_file().
 THEMES_FILE = Path(__file__).resolve().parent / "eval" / "ipc302_themes.json"
 
 
@@ -379,13 +379,23 @@ def summarize_uploaded(
     return {"summary": summary}
 
 
-@lru_cache(maxsize=1)
+def _judgments_file() -> Path:
+    """The active corpus's judgments.jsonl (see config.corpus_paths)."""
+    return config.corpus_paths().judgments
+
+
 def _load_judgments_index() -> dict[str, dict[str, Any]]:
-    """Load judgments from judgments.jsonl indexed by case_name."""
-    if not JUDGMENTS_FILE.exists():
+    """Load the active corpus's judgments indexed by case_name."""
+    return _load_judgments_index_for(_judgments_file())
+
+
+@lru_cache(maxsize=2)
+def _load_judgments_index_for(judgments_file: Path) -> dict[str, dict[str, Any]]:
+    """Load judgments from ``judgments_file`` indexed by case_name."""
+    if not judgments_file.exists():
         return {}
     index: dict[str, dict[str, Any]] = {}
-    with JUDGMENTS_FILE.open("r", encoding="utf-8") as file:
+    with judgments_file.open("r", encoding="utf-8") as file:
         for line in file:
             line = line.strip()
             if not line:
@@ -411,12 +421,12 @@ def _load_theme_data() -> dict[str, list[str]]:
 
 
 def find_judgment_by_case_name(case_name: str) -> dict[str, Any] | None:
-    """Read backend/data/judgments.jsonl and return matching record, or None."""
+    """Read the active corpus's judgments.jsonl and return the matching record, or None."""
     index = _load_judgments_index()
     if case_name in index:
         return index[case_name]
-    if JUDGMENTS_FILE.exists():
-        _load_judgments_index.cache_clear()
+    if _judgments_file().exists():
+        _load_judgments_index_for.cache_clear()
         return _load_judgments_index().get(case_name)
     return None
 

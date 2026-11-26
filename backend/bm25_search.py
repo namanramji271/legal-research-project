@@ -12,7 +12,8 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
-from scripts.build_embeddings import DEFAULT_INPUT_PATH, build_chunk_records
+import config
+from scripts.build_embeddings import build_chunk_records
 
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
@@ -32,10 +33,13 @@ def _tokenize(text: str) -> list[str]:
     return TOKEN_PATTERN.findall(text.lower())
 
 
-@lru_cache(maxsize=1)
-def get_bm25_index(
-    input_path: Path = DEFAULT_INPUT_PATH,
-) -> BM25JudgmentIndex:
+def get_bm25_index(input_path: Path | None = None) -> BM25JudgmentIndex:
+    """Return the BM25 index for ``input_path`` (default: the active corpus)."""
+    return _build_bm25_index(input_path or config.corpus_paths().judgments)
+
+
+@lru_cache(maxsize=2)
+def _build_bm25_index(input_path: Path) -> BM25JudgmentIndex:
     """Build the chunk-level BM25 index once per corpus path and process."""
     _ids, documents, metadatas = build_chunk_records(input_path)
     tokenized_documents = [_tokenize(document) for document in documents]

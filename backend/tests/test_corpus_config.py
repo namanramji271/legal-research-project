@@ -86,3 +86,88 @@ def test_corpus_paths_reject_bad_arguments() -> None:
         config.corpus_paths("v1", "include")
     with pytest.raises(ValueError, match="unknown corpus version"):
         config.corpus_paths("v9")
+
+
+# --- Consumers follow corpus_paths() ------------------------------------------
+
+import os  # noqa: E402
+
+os.environ.setdefault("GEMINI_API_KEY", "test-key-not-used")
+
+
+@pytest.fixture(params=["v1", "v2"])
+def corpus(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> config.CorpusPaths:
+    monkeypatch.setattr(config, "SETTINGS", config.load_settings({"CORPUS_VERSION": request.param}))
+    return config.corpus_paths()
+
+
+def test_search_opens_the_active_corpus_collections(corpus: config.CorpusPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    import search
+
+    opened: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def get_collection(self, name: str, embedding_function: object) -> str:
+            opened.append((self.path, name))
+            return "collection"
+
+    monkeypatch.setattr(search.chromadb, "PersistentClient", FakeClient)
+    monkeypatch.setattr(search, "get_embedding_function", lambda: None)
+    monkeypatch.setattr(search, "get_bge_embedding_function", lambda: None)
+
+    search.get_judgment_collection()
+    search.get_bge_judgment_collection()
+
+    assert opened == [
+        (str(corpus.minilm_db), corpus.minilm_collection),
+        (str(corpus.bge_db), corpus.bge_collection),
+    ]
+
+
+def test_bm25_index_defaults_to_the_active_corpus(corpus: config.CorpusPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    import bm25_search
+
+    built: list[Path] = []
+    monkeypatch.setattr(bm25_search, "_build_bm25_index", lambda path: built.append(path) or "index")
+
+    assert bm25_search.get_bm25_index() == "index"
+    bm25_search.get_bm25_index(Path("explicit.jsonl"))
+    assert built == [corpus.judgments, Path("explicit.jsonl")]
+
+
+def test_documents_reads_the_active_corpus_judgments(corpus: config.CorpusPaths) -> None:
+    for module in ("docx", "pytesseract", "pdfplumber", "PIL"):
+        pytest.importorskip(module)
+    import documents
+
+    assert documents._judgments_file() == corpus.judgments
+
+
+@pytest.mark.parametrize("script", ["build_embeddings", "build_embeddings_bge"])
+def test_build_scripts_keep_v1_defaults_and_target_v2_folders(script: str) -> None:
+    import importlib
+
+    sys.path.insert(0, str(BACKEND_DIR / "scripts"))
+    module = importlib.import_module(script)
+    minilm = script == "build_embeddings"
+    v1 = config.corpus_paths("v1")
+    v2 = config.corpus_paths("v2")
+
+    # v1: exactly the destinations the scripts used before CORPUS_VERSION existed.
+    assert module.resolve_targets(module.parse_args(["--corpus", "v1"])) == (
+        DATA / "judgments.jsonl",
+        module.DEFAULT_CHROMA_PATH,
+        v1.minilm_collection if minilm else v1.bge_collection,
+    )
+    assert module.resolve_targets(module.parse_args(["--corpus", "v2"])) == (
+        v2.judgments,
+        v2.minilm_db if minilm else v2.bge_db,
+        v2.minilm_collection if minilm else v2.bge_collection,
+    )
+    overridden = module.resolve_targets(
+        module.parse_args(["--corpus", "v2", "--input", "in.jsonl", "--chroma-path", "db"])
+    )
+    assert overridden[:2] == (Path("in.jsonl"), Path("db"))
