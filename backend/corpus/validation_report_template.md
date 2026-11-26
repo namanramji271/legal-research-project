@@ -47,6 +47,7 @@ shown for reference only and are not population estimates.
 
 - Stratum populations (N_s): $population
 - Quotas (n_s): $quotas
+- Human subset: $human_per_stratum per stratum ($overlap documents), seed $human_subset_seed
 - Strata (disjoint, assigned in this order): weak_split (any split other than
   both markers or jurisdiction+heading), collision (any 96–106 mention),
   rejected_flagged, implicit_only, explicit.
@@ -54,8 +55,17 @@ shown for reference only and are not population estimates.
   calibration documents, and PDFs that failed (failed, missing,
   extraction_failed in the manifest).
 - The headnote/body split rules were frozen before this sample was drawn.
-- Documents labelled "unsure" by adjudication, excluded from strict-label
-  detector metrics: $unsure (loose label: $secondary_unsure)
+
+## LLM annotator disclosure
+
+- Model id (as reported by the CLI): $llm_model (requested: $llm_requested_model)
+- Prompt template: `$prompt_template` (SHA-256 $prompt_sha256)
+- Claude Code CLI version: $cli_version
+- Labelling dates: $llm_dates
+- One fresh session per document, no tools, no files; input was the
+  guideline plus that document's title, citation, headnote, first 600
+  characters of the body and full body. The committed labels omit the
+  `reason` column (no document text).
 
 ## Uncertainty
 
@@ -66,51 +76,39 @@ stratified percentile bootstrap ($resamples resamples, seed $seed): each
 stratum is resampled with replacement at its own size, so the N_s / n_s
 weights stay fixed.
 
-**The pooled weighted estimate rests on few labels per stratum** ($min_quota–$max_quota
-documents each), and each stratum's weight is its population share, so a
-single label in a heavily weighted stratum moves the pooled figure a lot.
-Read the intervals before the point estimates. A bootstrap interval
-collapses to a point when no errors of that kind were observed in the
-sample (e.g. recall `1.0 [1.0, 1.0]` with no false negatives); that does not
-mean there is no uncertainty, so read the per-stratum Wilson intervals
-instead. Acceptance is still judged
-on the point estimates, as pre-registered; the intervals are not an
-acceptance criterion.
+**The pooled weighted estimate rests on few labels per stratum**
+($min_quota–$max_quota documents each in the main analysis, $human_per_stratum
+in the 25-only sensitivity analysis), and each stratum's weight is its
+population share, so a single label in a heavily weighted stratum moves the
+pooled figure a lot. Read the intervals before the point estimates. A
+bootstrap interval collapses to a point when no errors of that kind were
+observed in the sample (e.g. recall `1.0 [1.0, 1.0]` with no false
+negatives); that does not mean there is no uncertainty, so read the
+per-stratum Wilson intervals instead. Acceptance is still judged on the
+point estimates, as pre-registered; the intervals are not an acceptance
+criterion.
 
-## Inter-annotator agreement
+## Agreement: LLM vs blind human ($overlap-document overlap)
 
 - Strict `in_scope` (yes / no / unsure): κ **$kappa**, raw agreement $raw_agreement
 - `section_as_charge` (yes / no): κ $kappa_charge, raw agreement $raw_agreement_charge
+- `split_correct` (yes / no / na): κ $kappa_split, raw agreement $raw_agreement_split
+- LLM accepted as annotator (κ on strict `in_scope` ≥ 0.70): **$llm_accepted**
 
-## Detector: primary rule against the strict label (document level, adjudicated)
+## Adjudication (human label wins)
 
-$primary_table
+- Disagreements per field: $disagreements
+- Final label changed from the blind human label: $changed
+- Gold labels: $gold_human adjudicated human, $gold_llm LLM, $gold_pending unused
+  (pending human labels)
 
-- Weighted pooled: $primary_weighted
-- Unweighted pooled (reference only): $primary_unweighted
+## Main analysis (adjudicated gold)
 
-### Section level (unweighted; pairs of document × section; 95% Wilson)
+$main_block
 
-| Group | TP | FP | FN | Precision | Recall |
-| --- | ---: | ---: | ---: | ---: | ---: |
-$section_table
+## Sensitivity analysis: the 25 human-labelled documents alone
 
-## Secondary: primary rule against the loose label (not used for acceptance)
-
-$secondary_table
-
-- Weighted pooled: $secondary_weighted
-
-## Sensitivity analysis: looser rule against the strict label (not used to choose the rule)
-
-$loose_table
-
-- Weighted pooled: $loose_weighted
-
-## Headnote / body split
-
-- Accuracy over judged documents (unweighted share; 95% stratified bootstrap): **$split_accuracy**
-- Per stratum (95% Wilson): $split_per_stratum
+$human_block
 
 ## Acceptance
 

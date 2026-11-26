@@ -172,26 +172,6 @@ def write_labels(path: Path, labels: dict[str, tuple[str, str, str, str]]) -> No
                         "sections_at_issue": sections, "split_correct": split})
 
 
-def test_score_and_report_end_to_end(tmp_path: Path) -> None:
-    key = {"seed": 1, "population": {"explicit": 20, "implicit_only": 20}, "quotas": v.QUOTAS,
-           "sample": [{"doc_id": f"d{i}", "stratum": "explicit" if i < 2 else "implicit_only",
-                       "primary_sections": ["302"], "loose_sections": ["302"]} for i in range(4)]}
-    labels = {f"d{i}": ("yes", "no", "302", "yes") for i in range(4)}
-    for name in ("a", "b", "adj"):
-        write_labels(tmp_path / f"{name}.csv", labels)
-    result = v.score(key, *(v.read_labels(tmp_path / f"{n}.csv") for n in ("a", "b", "adj")))
-    assert result["agreement"]["in_scope"]["kappa"] is None  # all identical labels: kappa undefined, check fails
-    assert result["agreement"]["section_as_charge"] == {"kappa": None, "raw_agreement": 1.0}
-    assert result["checks"] == {"kappa": False, "weighted_precision": True, "split_accuracy": True}
-    report = v.render_report(result, key)
-    assert "Pre-registered labels" in report and "not used to choose the rule" in report
-    assert "against the loose label" in report and "section_as_charge" in report
-    assert "rests on few labels per stratum" in report and "8–15" in report
-    assert "1.0 [1.0, 1.0]" in report and "stratified bootstrap" in report
-    assert result["acceptance_on"] == "point estimates"
-    assert "NOT ACCEPTED" in report and "fresh 55" in report
-
-
 def test_read_labels_validates_values(tmp_path: Path) -> None:
     write_labels(tmp_path / "bad.csv", {"d1": ("maybe", "no", "", "")})
     with pytest.raises(ValueError, match="yes/no/unsure"):
@@ -204,28 +184,13 @@ def test_read_labels_validates_values(tmp_path: Path) -> None:
         v.read_labels(tmp_path / "both.csv")
 
 
-def test_gold_views_and_kappa_on_both_fields(tmp_path: Path) -> None:
+def test_gold_views() -> None:
     assert v.gold_in_scope({"in_scope": "no", "section_as_charge": "yes"}) is False
     assert v.gold_in_scope({"in_scope": "no", "section_as_charge": "yes"}, "loose") is True
     assert v.gold_in_scope({"in_scope": "unsure", "section_as_charge": "yes"}, "loose") is True
     assert v.gold_in_scope({"in_scope": "unsure", "section_as_charge": "no"}, "loose") is None
     with pytest.raises(ValueError):
         v.gold_in_scope({"in_scope": "yes"}, "other")
-    key = {"seed": 1, "population": {"explicit": 10}, "quotas": v.QUOTAS,
-           "sample": [{"doc_id": f"d{i}", "stratum": "explicit", "primary_sections": ["302"],
-                       "loose_sections": ["302"]} for i in range(4)]}
-    a = {"d0": ("yes", "no", "302", "yes"), "d1": ("no", "yes", "", "yes"),
-         "d2": ("no", "yes", "", "yes"), "d3": ("no", "no", "", "yes")}
-    b = {**a, "d3": ("no", "yes", "", "yes")}  # disagree on section_as_charge only
-    for name, labels in (("a", a), ("b", b), ("adj", a)):
-        write_labels(tmp_path / f"{name}.csv", labels)
-    result = v.score(key, *(v.read_labels(tmp_path / f"{n}.csv") for n in ("a", "b", "adj")))
-    assert result["agreement"]["in_scope"]["kappa"] == 1.0
-    # section_as_charge: a = n,y,y,n; b = n,y,y,y -> p_o 0.75, p_e 0.5*0.25 + 0.5*0.75 = 0.5
-    assert result["agreement"]["section_as_charge"] == {"kappa": 0.5, "raw_agreement": 0.75}
-    assert result["primary"]["pooled_weighted"]["precision"] == 0.25
-    assert result["secondary_loose_label"]["pooled_weighted"]["precision"] == 0.75
-    assert result["checks"]["weighted_precision"] is False  # acceptance uses the strict label
 
 
 def test_quotas_and_failed_pdfs_are_excluded(tmp_path: Path) -> None:
@@ -310,3 +275,135 @@ def test_split_accuracy_intervals() -> None:
     assert lo < 0.8 < hi
     assert out["per_stratum"]["weak_split"] == 0.5 and out["per_stratum_ci"]["weak_split"] == v.wilson(2, 4)
     assert out["per_stratum_ci"]["collision"] is None
+
+
+def lab(scope: str, charge: str = "no", split: str = "yes", sections: str = "") -> dict:
+    return {"in_scope": scope, "section_as_charge": charge, "sections": set(sections.split(";")) - {""},
+            "split_correct": split}
+
+
+def option_b_key() -> dict:
+    """5 explicit (detector yes) + 5 rejected_flagged (detector no); human subset e0, e1, r0, r1."""
+    sample = ([{"doc_id": f"e{i}", "stratum": "explicit", "primary_sections": ["302"], "loose_sections": ["302"]}
+               for i in range(5)]
+              + [{"doc_id": f"r{i}", "stratum": "rejected_flagged", "primary_sections": [], "loose_sections": []}
+                 for i in range(5)])
+    return {"seed": 1, "population": {"explicit": 50, "rejected_flagged": 50}, "quotas": v.QUOTAS,
+            "sample": sample, "human_subset": ["e0", "e1", "r0", "r1"], "human_subset_seed": 3}
+
+
+def option_b_labels() -> tuple[dict, dict]:
+    llm = {f"e{i}": lab("yes", sections="302") for i in range(5)} | {f"r{i}": lab("no") for i in range(5)}
+    human = {d: dict(llm[d]) for d in ("e0", "e1", "r0", "r1")}
+    return llm, human
+
+
+def log_row(doc_id: str, field: str, human_blind: str, llm: str, final: str, note: str = "") -> dict:
+    return {"doc_id": doc_id, "field": field, "human_blind": human_blind, "llm": llm, "final": final, "note": note}
+
+
+def as_rows(labels: dict) -> dict:
+    return {d: (x["in_scope"], x["section_as_charge"], ";".join(sorted(x["sections"])), x["split_correct"])
+            for d, x in labels.items()}
+
+
+def test_score_option_b_accepted_uses_llm_gold_for_the_rest() -> None:
+    key = option_b_key()
+    llm, human = option_b_labels()
+    result = v.score(key, llm, human, human, [], resamples=200)
+    assert result["agreement_llm_vs_human"]["in_scope"] == {"kappa": 1.0, "raw_agreement": 1.0}
+    assert result["llm_accepted_as_annotator"] is True
+    assert result["gold_sources"] == {"adjudicated_human": 4, "llm": 6, "unused_pending_human": 0}
+    assert result["main"]["documents"] == 10 and result["sensitivity_human_25"]["documents"] == 4
+    assert result["sensitivity_human_25"]["per_stratum_n"]["explicit"] == 2
+    assert result["main"]["primary"]["pooled_weighted"]["precision"] == 1.0
+    assert result["checks"] == {"kappa": True, "weighted_precision": True, "split_accuracy": True}
+    assert result["verdict"] == "ACCEPTED"
+
+
+def test_score_option_b_kappa_missed_is_incomplete_and_human_wins() -> None:
+    key = option_b_key()
+    llm, human = option_b_labels()
+    human["e1"] = lab("no")  # LLM yes / human no
+    human["r1"] = lab("yes", sections="302")  # LLM no / human yes
+    log = [log_row("e1", "in_scope", "no", "yes", "no", "kept"), log_row("r1", "in_scope", "yes", "no", "yes")]
+    result = v.score(key, llm, human, human, log, resamples=200)
+    # llm y,y,n,n vs human y,n,n,y: p_o 0.5, p_e 0.5 -> kappa 0
+    assert result["agreement_llm_vs_human"]["in_scope"]["kappa"] == 0.0
+    assert result["llm_accepted_as_annotator"] is False and result["checks"]["kappa"] is False
+    assert result["gold_sources"] == {"adjudicated_human": 4, "llm": 0, "unused_pending_human": 6}
+    assert result["main"]["documents"] == 4  # the other 30 (here 6) are not used
+    assert result["main"]["primary"]["per_stratum"]["explicit"]["fp"] == 1  # human label (no) won
+    assert result["adjudication"]["disagreements"]["in_scope"] == 2
+    assert result["adjudication"]["changed_from_blind_human"]["in_scope"] == 0
+    assert result["verdict"].startswith("INCOMPLETE") and "6 documents await human labels" in result["verdict"]
+    report = v.render_report(result, key)
+    assert "Provisional (25 only)" in report and "INCOMPLETE" in report
+
+
+def test_adjudication_is_enforced() -> None:
+    key = option_b_key()
+    llm, human = option_b_labels()
+    human["e1"] = lab("yes", split="no", sections="302")  # disagreement on split_correct only
+    with pytest.raises(ValueError, match="e1 split_correct.*no log row"):
+        v.score(key, llm, human, human, [], resamples=10)
+    # The human may adopt the LLM label after reading its reason, but only with a log row.
+    adopted = {**human, "e1": lab("yes", sections="302")}
+    log = [log_row("e1", "split_correct", "no", "yes", "yes", "LLM reason convincing")]
+    result = v.score(key, llm, human, adopted, log, resamples=10)
+    assert result["adjudication"]["changed_from_blind_human"]["split_correct"] == 1
+    with pytest.raises(ValueError, match="does not match sheets"):
+        v.score(key, llm, human, human, log, resamples=10)  # log says final yes, adjudicated says no
+    silent = {**human, "e0": lab("no")}  # agreed label changed without a log row
+    with pytest.raises(ValueError, match="e0 in_scope: adjudicated 'no' differs"):
+        v.score(key, llm, human, silent, [log_row("e1", "split_correct", "no", "yes", "no")], resamples=10)
+    with pytest.raises(ValueError, match="not in the human subset"):
+        v.score(key, llm, human, human, [log_row("e4", "in_scope", "yes", "yes", "yes")], resamples=10)
+
+
+def test_score_requires_subset_and_labels() -> None:
+    key = option_b_key()
+    llm, human = option_b_labels()
+    with pytest.raises(ValueError, match="no human_subset"):
+        v.score({**key, "human_subset": []}, llm, human, human, [], resamples=10)
+    del llm["r4"]
+    with pytest.raises(ValueError, match="llm:r4"):
+        v.score(key, llm, human, human, [], resamples=10)
+
+
+def test_score_cli_and_report_disclosure(tmp_path: Path) -> None:
+    key = option_b_key()
+    llm, human = option_b_labels()
+    target = tmp_path / "validation"
+    target.mkdir()
+    (target / "validation_key.json").write_text(json.dumps(key), encoding="utf-8")
+    write_labels(tmp_path / "llm.csv", as_rows(llm))
+    write_labels(tmp_path / "human.csv", as_rows(human))
+    write_labels(tmp_path / "adj.csv", as_rows(human))
+    (tmp_path / "log.csv").write_text(",".join(v.LOG_COLUMNS) + "\n", encoding="utf-8")
+    run = {"models": ["claude-sonnet-5-5"], "requested_model": "claude-sonnet-5-5",
+           "prompt_template": "backend/corpus/llm_label_prompt.md", "prompt_sha256": "ab" * 32,
+           "cli_version": "2.1.332 (Claude Code)", "dates": ["2026-11-26"]}
+    (target / "llm_run.json").write_text(json.dumps(run), encoding="utf-8")
+    assert v.main(["--work-dir", str(tmp_path), "score", "--llm", str(tmp_path / "llm.csv"), "--human",
+                   str(tmp_path / "human.csv"), "--adjudicated", str(tmp_path / "adj.csv"),
+                   "--log", str(tmp_path / "log.csv")]) == 0
+    report = (target / "validation_report.md").read_text(encoding="utf-8")
+    assert "claude-sonnet-5-5" in report and "ab" * 32 in report and "2026-11-26" in report
+    assert "Pre-registered labels" in report and "Option B" in report and "not used to choose the rule" in report
+    assert "Sensitivity analysis: the 25 human-labelled documents alone" in report
+    assert "rests on few labels per stratum" in report and "8–15" in report
+    assert "1.0 [1.0, 1.0]" in report and "Verdict: **ACCEPTED**" in report
+    assert json.loads((target / "validation_result.json").read_text(encoding="utf-8"))["accepted"] is True
+    # Without llm_run.json the disclosure says so instead of silently omitting it.
+    result = v.score(key, llm, human, human, [], resamples=10)
+    assert "NOT RECORDED" in v.render_report(result, key)
+
+
+def test_read_log_requires_columns(tmp_path: Path) -> None:
+    (tmp_path / "log.csv").write_text("doc_id,field\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing columns"):
+        v.read_log(tmp_path / "log.csv")
+    (tmp_path / "ok.csv").write_text(",".join(v.LOG_COLUMNS) + "\nE1,In_Scope,No,Yes,No,Kept as is\n",
+                                     encoding="utf-8")
+    assert v.read_log(tmp_path / "ok.csv") == [log_row("e1", "in_scope", "no", "yes", "no", "Kept as is")]

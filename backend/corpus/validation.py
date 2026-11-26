@@ -519,36 +519,132 @@ def split_accuracy(items: list[dict[str, Any]], gold: dict[str, dict], seed: int
             "per_stratum_ci": {s: wilson(sum(v), len(v)) for s, v in per.items()}}
 
 
-def score(key: dict[str, Any], a: dict, b: dict, adjudicated: dict,
-          resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
-    """Agreement, detector and split metrics. Acceptance uses point estimates; intervals are reported beside them."""
+ADJUDICATED_FIELDS = ("in_scope", "section_as_charge", "split_correct")
+LOG_COLUMNS = ("doc_id", "field", "human_blind", "llm", "final", "note")
+
+
+def read_log(path: Path) -> list[dict[str, str]]:
+    """adjudication_log.csv: one row per LLM/human disagreement on the 25."""
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        missing = [c for c in LOG_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"{path.name}: missing columns {missing}")
+        return [{c: (row[c] or "").strip().lower() if c != "note" else (row[c] or "").strip() for c in LOG_COLUMNS}
+                for row in reader]
+
+
+def check_adjudication(subset: list[str], llm: dict, human: dict, adjudicated: dict,
+                       log: list[dict[str, str]]) -> dict[str, Any]:
+    """Enforce the pre-registered adjudication: every disagreement logged, the human decides, nothing silent.
+
+    Raises ValueError if a disagreement has no log row, a log row does not match
+    the sheets, or an adjudicated label differs from the blind human label
+    without a log row.
+    """
+    logged = {}
+    for row in log:
+        if row["field"] not in ADJUDICATED_FIELDS:
+            raise ValueError(f"adjudication log: unknown field {row['field']!r} for {row['doc_id']}")
+        if row["doc_id"] not in subset:
+            raise ValueError(f"adjudication log: {row['doc_id']} is not in the human subset")
+        k = (row["doc_id"], row["field"])
+        if k in logged:
+            raise ValueError(f"adjudication log: duplicate row for {k}")
+        logged[k] = row
+    errors, disagreements, changed = [], Counter(), Counter()
+    for d in subset:
+        for field in ADJUDICATED_FIELDS:
+            h, m, final = human[d][field], llm[d][field], adjudicated[d][field]
+            row = logged.get((d, field))
+            if h != m:
+                disagreements[field] += 1
+            if row is None:
+                if h != m:
+                    errors.append(f"{d} {field}: human {h!r} vs LLM {m!r} has no log row")
+                elif final != h:
+                    errors.append(f"{d} {field}: adjudicated {final!r} differs from blind human {h!r} without a log row")
+                continue
+            if (row["human_blind"], row["llm"], row["final"]) != (h, m, final):
+                errors.append(f"{d} {field}: log row {row['human_blind']}/{row['llm']}/{row['final']} "
+                              f"does not match sheets {h}/{m}/{final}")
+            changed[field] += final != h
+    if errors:
+        raise ValueError("adjudication check failed:\n  " + "\n  ".join(errors))
+    return {"disagreements": {f: disagreements[f] for f in ADJUDICATED_FIELDS},
+            "changed_from_blind_human": {f: changed[f] for f in ADJUDICATED_FIELDS},
+            "logged_rows": len(log)}
+
+
+def _evaluate(items: list[dict[str, Any]], gold: dict[str, dict], key: dict[str, Any],
+              resamples: int) -> dict[str, Any]:
+    pop, seed = key["population"], key["seed"]
+    return {"documents": len(items),
+            "per_stratum_n": {s: sum(i["stratum"] == s for i in items) for s in STRATA},
+            "primary": detector_metrics(items, gold, pop, "primary", "strict", seed, resamples),
+            "secondary_loose_label": detector_metrics(items, gold, pop, "primary", "loose", seed, resamples),
+            "sensitivity_loose_rule": detector_metrics(items, gold, pop, "loose", "strict", seed, resamples),
+            "split": split_accuracy(items, gold, seed, resamples)}
+
+
+def score(key: dict[str, Any], llm: dict, human: dict, adjudicated: dict, log: list[dict[str, str]],
+          llm_run: dict[str, Any] | None = None, resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+    """Option B scoring. Acceptance uses point estimates; intervals are reported beside them.
+
+    ``llm`` covers all 55, ``human`` (blind) and ``adjudicated`` cover the 25 in
+    key["human_subset"]. Kappa is LLM vs blind human on the 25. Gold is the
+    adjudicated label on the 25 plus, only if kappa >= 0.70, the LLM label on
+    the other 30.
+    """
     items = key["sample"]
+    subset = key.get("human_subset")
+    if not subset:
+        raise ValueError("validation_key.json has no human_subset; run `validation.py human-sheet` first")
     ids = [i["doc_id"] for i in items]
-    missing = [d for d in ids if d not in a or d not in b or d not in adjudicated]
+    missing = ([f"llm:{d}" for d in ids if d not in llm] + [f"human:{d}" for d in subset if d not in human]
+               + [f"adjudicated:{d}" for d in subset if d not in adjudicated])
     if missing:
         raise ValueError(f"labels missing for: {missing}")
     agreement = {}
-    for field in ("in_scope", "section_as_charge"):
-        xa, xb = [a[d][field] for d in ids], [b[d][field] for d in ids]
-        agreement[field] = {"kappa": cohen_kappa(xa, xb),
-                            "raw_agreement": round(sum(x == y for x, y in zip(xa, xb)) / len(ids), 4)}
-    pop, seed = key["population"], key["seed"]
-    primary = detector_metrics(items, adjudicated, pop, "primary", "strict", seed, resamples)
-    secondary = detector_metrics(items, adjudicated, pop, "primary", "loose", seed, resamples)
-    sensitivity = detector_metrics(items, adjudicated, pop, "loose", "strict", seed, resamples)
-    split = split_accuracy(items, adjudicated, seed, resamples)
+    for field in ADJUDICATED_FIELDS:
+        xl, xh = [llm[d][field] for d in subset], [human[d][field] for d in subset]
+        agreement[field] = {"kappa": cohen_kappa(xl, xh),
+                            "raw_agreement": round(sum(x == y for x, y in zip(xl, xh)) / len(subset), 4)}
+    adjudication = check_adjudication(subset, llm, human, adjudicated, log)
     kappa = agreement["in_scope"]["kappa"]
+    llm_accepted = kappa is not None and kappa >= ACCEPTANCE["kappa"]
+
+    in_subset = set(subset)
+    gold = {d: adjudicated[d] for d in subset}
+    if llm_accepted:
+        gold |= {d: llm[d] for d in ids if d not in in_subset}
+    main_items = [i for i in items if i["doc_id"] in gold]
+    main = _evaluate(main_items, gold, key, resamples)
+    human_only = _evaluate([i for i in items if i["doc_id"] in in_subset], gold, key, resamples)
+
     checks = {
-        "kappa": kappa is not None and kappa >= ACCEPTANCE["kappa"],
-        "weighted_precision": (primary["pooled_weighted"]["precision"] or 0) >= ACCEPTANCE["weighted_precision"],
-        "split_accuracy": (split["accuracy"] or 0) >= ACCEPTANCE["split_accuracy"],
+        "kappa": llm_accepted,
+        "weighted_precision": (main["primary"]["pooled_weighted"]["precision"] or 0) >= ACCEPTANCE["weighted_precision"],
+        "split_accuracy": (main["split"]["accuracy"] or 0) >= ACCEPTANCE["split_accuracy"],
     }
-    return {"agreement": agreement, "primary": primary, "secondary_loose_label": secondary,
-            "sensitivity_loose_rule": sensitivity, "split": split,
+    if all(checks.values()):
+        verdict = "ACCEPTED"
+    elif not llm_accepted:
+        verdict = (f"INCOMPLETE: LLM-human kappa below {ACCEPTANCE['kappa']}; the other "
+                   f"{len(ids) - len(subset)} documents await human labels (the main analysis is provisional, "
+                   f"{len(subset)} documents only)")
+    else:
+        verdict = (f"NOT ACCEPTED: change the rule and validate on a fresh {SAMPLE_SIZE} "
+                   f"(these {SAMPLE_SIZE} become development documents)")
+    return {"design": "option_b", "agreement_llm_vs_human": agreement, "overlap": len(subset),
+            "adjudication": adjudication, "llm_accepted_as_annotator": llm_accepted,
+            "gold_sources": {"adjudicated_human": len(subset),
+                             "llm": len(gold) - len(subset), "unused_pending_human": len(ids) - len(gold)},
+            "main": main, "sensitivity_human_25": human_only, "llm_run": llm_run or {},
             "intervals": {"confidence": 0.95, "per_stratum": "wilson", "pooled_and_split": "stratified percentile bootstrap",
-                          "bootstrap_resamples": resamples, "bootstrap_seed": seed},
+                          "bootstrap_resamples": resamples, "bootstrap_seed": key["seed"]},
             "acceptance": ACCEPTANCE, "acceptance_on": "point estimates", "checks": checks,
-            "accepted": all(checks.values())}
+            "accepted": all(checks.values()), "verdict": verdict}
 
 
 def _fmt(value: float | None, ci: list[float] | None) -> str:
@@ -584,10 +680,10 @@ def _unweighted_line(metrics: dict[str, Any]) -> str:
             f"recall {_fmt(u['recall'], u['recall_ci'])} (95% Wilson)")
 
 
-def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
-    primary, secondary = result["primary"], result["secondary_loose_label"]
-    loose = result["sensitivity_loose_rule"]
-    agreement, split = result["agreement"], result["split"]
+def _analysis_block(bundle: dict[str, Any], heading: str) -> str:
+    """Markdown for one analysis (main or 25-only): detector tables, sensitivity, split."""
+    primary, secondary = bundle["primary"], bundle["secondary_loose_label"]
+    loose, split = bundle["sensitivity_loose_rule"], bundle["split"]
     sections = "\n".join(
         f"| {g} | {m['tp']} | {m['fp']} | {m['fn']} | {_fmt(m['precision'], m['precision_ci'])} | "
         f"{_fmt(m['recall'], m['recall_ci'])} |"
@@ -595,23 +691,75 @@ def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
     )
     split_per_stratum = "; ".join(f"{s} {_fmt(split['per_stratum'][s], split['per_stratum_ci'][s])}"
                                   for s in split["per_stratum"])
+    return "\n".join([
+        f"### {heading}: primary rule against the strict label (acceptance)",
+        "",
+        f"Documents: {bundle['documents']} (per stratum: {json.dumps(bundle['per_stratum_n'])}); "
+        f"unsure excluded: {primary['unsure_excluded']} strict, {secondary['unsure_excluded']} loose.",
+        "",
+        _table(primary),
+        "",
+        f"- Weighted pooled: {_weighted_line(primary)}",
+        f"- Unweighted pooled (reference only): {_unweighted_line(primary)}",
+        "",
+        "Section level (unweighted; pairs of document × section; 95% Wilson):",
+        "",
+        "| Group | TP | FP | FN | Precision | Recall |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        sections,
+        "",
+        f"### {heading}: primary rule against the loose label (secondary, not used for acceptance)",
+        "",
+        _table(secondary),
+        "",
+        f"- Weighted pooled: {_weighted_line(secondary)}",
+        "",
+        f"### {heading}: looser rule against the strict label (sensitivity, not used to choose the rule)",
+        "",
+        _table(loose),
+        "",
+        f"- Weighted pooled: {_weighted_line(loose)}",
+        "",
+        f"### {heading}: headnote / body split",
+        "",
+        f"- Accuracy over {split['judged']} judged documents (unweighted share; 95% stratified bootstrap): "
+        f"**{_fmt(split['accuracy'], split['accuracy_ci'])}**",
+        f"- Per stratum (95% Wilson): {split_per_stratum}",
+    ])
+
+
+def _kappa(value: float | None) -> str:
+    return "undefined (both used one identical label)" if value is None else str(value)
+
+
+def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
+    agreement, run = result["agreement_llm_vs_human"], result["llm_run"]
+    adj, sources = result["adjudication"], result["gold_sources"]
     quotas = key["quotas"].values()
+    not_recorded = "NOT RECORDED"
+    main_heading = "All adjudicated documents" if result["llm_accepted_as_annotator"] else "Provisional (25 only)"
     return Template(TEMPLATE_PATH.read_text(encoding="utf-8")).substitute(
         seed=key["seed"], population=json.dumps(key["population"]), quotas=json.dumps(key["quotas"]),
-        min_quota=min(quotas), max_quota=max(quotas), resamples=result["intervals"]["bootstrap_resamples"],
-        kappa=agreement["in_scope"]["kappa"], raw_agreement=agreement["in_scope"]["raw_agreement"],
-        kappa_charge=agreement["section_as_charge"]["kappa"],
+        min_quota=min(quotas), max_quota=max(quotas), human_per_stratum=HUMAN_PER_STRATUM,
+        human_subset_seed=key.get("human_subset_seed", not_recorded), overlap=result["overlap"],
+        resamples=result["intervals"]["bootstrap_resamples"],
+        llm_model=", ".join(run.get("models", [])) or not_recorded,
+        llm_requested_model=run.get("requested_model", not_recorded),
+        prompt_template=run.get("prompt_template", not_recorded),
+        prompt_sha256=run.get("prompt_sha256", not_recorded),
+        cli_version=run.get("cli_version", not_recorded),
+        llm_dates=", ".join(run.get("dates", [])) or not_recorded,
+        kappa=_kappa(agreement["in_scope"]["kappa"]), raw_agreement=agreement["in_scope"]["raw_agreement"],
+        kappa_charge=_kappa(agreement["section_as_charge"]["kappa"]),
         raw_agreement_charge=agreement["section_as_charge"]["raw_agreement"],
-        primary_table=_table(primary), primary_weighted=_weighted_line(primary),
-        primary_unweighted=_unweighted_line(primary),
-        section_table=sections,
-        secondary_table=_table(secondary), secondary_weighted=_weighted_line(secondary),
-        secondary_unsure=secondary["unsure_excluded"],
-        loose_table=_table(loose), loose_weighted=_weighted_line(loose),
-        split_accuracy=_fmt(split["accuracy"], split["accuracy_ci"]), split_per_stratum=split_per_stratum,
-        unsure=primary["unsure_excluded"],
-        checks=json.dumps(result["checks"]), verdict="ACCEPTED" if result["accepted"] else
-        f"NOT ACCEPTED: change the rule and validate on a fresh {SAMPLE_SIZE} (these {SAMPLE_SIZE} become development documents)",
+        kappa_split=_kappa(agreement["split_correct"]["kappa"]),
+        raw_agreement_split=agreement["split_correct"]["raw_agreement"],
+        llm_accepted="yes" if result["llm_accepted_as_annotator"] else "no",
+        disagreements=json.dumps(adj["disagreements"]), changed=json.dumps(adj["changed_from_blind_human"]),
+        gold_human=sources["adjudicated_human"], gold_llm=sources["llm"], gold_pending=sources["unused_pending_human"],
+        main_block=_analysis_block(result["main"], main_heading),
+        human_block=_analysis_block(result["sensitivity_human_25"], "Human-labelled 25 only"),
+        checks=json.dumps(result["checks"]), verdict=result["verdict"],
     )
 
 
@@ -623,9 +771,12 @@ def main(argv: list[str] | None = None) -> int:
     sheet = sub.add_parser("sheet", help=f"draw the {SAMPLE_SIZE} + 5, write the key and the calibration sheet")
     sheet.add_argument("--seed", type=int, default=DEFAULT_SEED)
     sub.add_parser("human-sheet", help=f"record the human subset in the key and write {HUMAN_SHEET}")
-    scoring = sub.add_parser("score", help="agreement and detector metrics from labelled sheets")
-    for flag in ("--a", "--b", "--adjudicated"):
-        scoring.add_argument(flag, type=Path, required=True)
+    scoring = sub.add_parser("score", help="Option B: LLM-human agreement, adjudication check and metrics")
+    scoring.add_argument("--llm", type=Path, required=True, help="validation_sheet_LLM.csv (all 55)")
+    scoring.add_argument("--human", type=Path, required=True, help=f"blind {HUMAN_SHEET}, filled in")
+    scoring.add_argument("--adjudicated", type=Path, required=True, help="adjudicated_25.csv (final labels)")
+    scoring.add_argument("--log", type=Path, required=True, help="adjudication_log.csv")
+    scoring.add_argument("--llm-run", type=Path, default=None, help="llm_run.json (default: <work-dir>/validation/)")
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     work_dir = args.work_dir.expanduser()
@@ -638,11 +789,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "human-sheet":
         make_human_sheet(work_dir)
         return 0
-    key = json.loads((work_dir / "validation" / "validation_key.json").read_text(encoding="utf-8"))
-    result = score(key, read_labels(args.a), read_labels(args.b), read_labels(args.adjudicated))
-    (work_dir / "validation" / "validation_result.json").write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
+    target = work_dir / "validation"
+    key = json.loads((target / "validation_key.json").read_text(encoding="utf-8"))
+    run_path = args.llm_run or target / "llm_run.json"
+    llm_run = json.loads(run_path.read_text(encoding="utf-8")) if run_path.is_file() else None
+    result = score(key, read_labels(args.llm), read_labels(args.human), read_labels(args.adjudicated),
+                   read_log(args.log), llm_run)
+    (target / "validation_result.json").write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
     report = render_report(result, key)
-    (work_dir / "validation" / "validation_report.md").write_text(report, encoding="utf-8")
+    (target / "validation_report.md").write_text(report, encoding="utf-8")
     print(report)
     return 0
 
