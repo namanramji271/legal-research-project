@@ -130,6 +130,51 @@ def draw(pool: list[dict[str, Any]], seed: int, exclude: set[str]) -> tuple[list
     return sample, calibration, population
 
 
+def pool_summary(work_dir: Path, dev_path: Path | None = None) -> dict[str, Any]:
+    """Aggregate detector counts over all extracted candidates. No per-document output."""
+    from corpus.prefilter import era  # local: keeps the module import light
+
+    candidates = {r["doc_id"]: r for r in load_records(work_dir / "candidates.jsonl")}
+    failed = excluded_ids(work_dir)
+    dev = load_dev_ids(dev_path) if dev_path else load_dev_ids()
+    groups = ("private_defence", "299-301", "302", "303", "304")
+    eras = sorted({era(int(r["year"])) for r in candidates.values()})
+    by_group_era = {g: Counter() for g in groups}
+    mentions = Counter()
+    strata_all, strata_eligible, split_methods = Counter(), Counter(), Counter()
+    in_scope = in_scope_loose = extracted = 0
+    for doc_id, meta in candidates.items():
+        path = work_dir / "text" / f"{doc_id}.json"
+        if doc_id in failed or not path.is_file():
+            continue
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("error"):
+            continue
+        extracted += 1
+        body = detect(record.get("body", ""))
+        for m in body.accepted():
+            mentions[m.kind] += 1
+        f = features(record)
+        s = stratum(f)
+        strata_all[s] += 1
+        strata_eligible[s] += doc_id not in dev
+        split_methods[record.get("split_method")] += 1
+        in_scope += bool(f["primary_sections"])
+        in_scope_loose += bool(f["loose_sections"])
+        for g in {section_group(x) for x in f["primary_sections"]}:
+            by_group_era[g][era(int(meta["year"]))] += 1
+    return {
+        "candidates": len(candidates), "excluded_failed_pdfs": len(failed), "extracted": extracted,
+        "in_scope_primary": in_scope, "in_scope_loose_sensitivity": in_scope_loose,
+        "in_scope_by_group_and_era": {g: {e: by_group_era[g][e] for e in eras} | {"total": sum(by_group_era[g].values())}
+                                      for g in groups},
+        "accepted_body_mentions": dict(mentions),
+        "split_methods": dict(split_methods),
+        "strata_all": {s: strata_all[s] for s in STRATA},
+        "strata_eligible_excluding_dev": {s: strata_eligible[s] for s in STRATA},
+    }
+
+
 def _body_start(record: dict[str, Any], chars: int = 150) -> str:
     return re.sub(r"\s+", " ", record.get("body", ""))[:chars]
 
@@ -331,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--work-dir", type=Path, default=sc_source.DEFAULT_WORK_DIR)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("summary", help="aggregate detector counts over all candidates (no per-document output)")
     sheet = sub.add_parser("sheet", help="draw the 50 + 5 and write blind sheets")
     sheet.add_argument("--seed", type=int, default=DEFAULT_SEED)
     scoring = sub.add_parser("score", help="agreement and detector metrics from labelled sheets")
@@ -339,6 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     work_dir = args.work_dir.expanduser()
+    if args.command == "summary":
+        print(json.dumps(pool_summary(work_dir), indent=1))
+        return 0
     if args.command == "sheet":
         make_sheets(work_dir, args.seed)
         return 0

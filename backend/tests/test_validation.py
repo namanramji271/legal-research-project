@@ -178,3 +178,23 @@ def test_quotas_and_failed_pdfs_are_excluded(tmp_path: Path) -> None:
     drawn = {i["doc_id"] for i in key["sample"] + key["calibration"]}
     assert "explicit_01" not in drawn and key["excluded_failed_pdfs"] == ["explicit_01"]
     assert key["population"]["explicit"] == 15
+
+
+def test_pool_summary_aggregates_only(tmp_path: Path) -> None:
+    candidates = []
+    for kind in BODIES:
+        for i in range(3):
+            doc_id = f"{kind}_{i}"
+            candidates.append({"doc_id": doc_id, "year": 1975 if i else 2015})
+            path = tmp_path / "text" / f"{doc_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record(doc_id, kind)), encoding="utf-8")
+    (tmp_path / "candidates.jsonl").write_text("\n".join(json.dumps(c) for c in candidates), encoding="utf-8")
+    dev = tmp_path / "dev.json"
+    dev.write_text(json.dumps({"documents": [{"doc_id": "explicit_0"}]}), encoding="utf-8")
+    summary = v.pool_summary(tmp_path, dev_path=dev)
+    assert summary["extracted"] == 15
+    assert summary["strata_all"] == {s: 3 for s in v.STRATA}
+    assert summary["strata_eligible_excluding_dev"]["explicit"] == 2
+    assert summary["in_scope_by_group_and_era"]["302"]["total"] == summary["in_scope_primary"]
+    assert "doc_id" not in json.dumps(summary)

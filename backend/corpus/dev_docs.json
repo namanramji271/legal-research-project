@@ -260,6 +260,58 @@
   {
    "doc_id": "2023_10_1139_1146",
    "reason": "PDF pipeline trial: headnote/body splits inspected and split rules tuned on them (2026-11-26)"
+  },
+  {
+   "doc_id": "2025_1_117_129",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "1971_2_917_926",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "1968_2_287_291",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "1990_2_939_960",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2006_1_423_430",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "S_2002_4_635_636",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2009_11_776_789",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "S_2001_5_54_104",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2004_1_554_563",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2023_9_1210_1217",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2026_1_770_820",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2016_5_172_203",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2012_7_541_559",
+   "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
   }
  ]
 }
