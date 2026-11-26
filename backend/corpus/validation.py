@@ -102,7 +102,8 @@ Usage (run only after the full extraction has finished):
         --human <validation_sheet_human_25.csv> --adjudicated <adjudicated_25.csv>
         --log <adjudication_log.csv>       (one command; wrapped here)
 
-Files go to <work-dir>/validation/ (titles and IDs; no judgment text).
+Files go to <work-dir>/validation/ (titles and IDs; no judgment text, except the
+LLM sheet's reason column, which quotes the decisive sentence and stays there).
 """
 
 from __future__ import annotations
