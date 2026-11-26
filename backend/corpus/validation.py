@@ -12,6 +12,37 @@ witness recall, a chargesheet recital). The LOOSE label (strict yes or
 section_as_charge yes) is a secondary gold standard, reported alongside;
 acceptance is judged against the strict label only.
 
+PRE-REGISTERED ANNOTATION DESIGN ("Option B", fixed before any labelling)
+-------------------------------------------------------------------------
+Annotator 1 is an LLM (``corpus/llm_label.py``): one fresh ``claude -p``
+session per document, with no tools and no files, run in resumable
+checkpoint batches of 10. It sees only the guideline (via the committed
+prompt template ``corpus/llm_label_prompt.md``) and, for that document,
+title, citation, extracted headnote, the first 600 characters of the body
+and the full body. It never sees the key, strata, detector output, document
+IDs or any other document's labels. It labels all 55 and gives a
+one-sentence reason quoting the decisive sentence.
+
+Annotator 2 is a legally trained human who labels, blind and following
+corpus/annotation_guideline.md, a seeded stratified subset of 25 of the 55
+(5 per stratum; seed + 2; recorded in the key as ``human_subset``), written
+as validation_sheet_human_25.csv. The 5 calibration documents are labelled
+and discussed jointly first and are not scored.
+
+Agreement: Cohen's kappa on strict ``in_scope`` between the LLM and the
+blind human labels on the 25-document overlap; the LLM is accepted as an
+annotator if kappa >= 0.70. If it is, the LLM labels are gold for the other
+30; if not, those 30 are not used until a human labels them (verdict
+INCOMPLETE). On the 25, every disagreement is adjudicated by the human after
+reading the LLM's reason; the human label wins, and every disagreement and
+change is logged (adjudication_log.csv).
+
+Detector and split metrics are computed on the adjudicated gold over all 55
+(human on 25, LLM on 30), and also on the 25 human-labelled documents alone
+as a sensitivity analysis. The report records the LLM model id, the prompt
+template (path and SHA-256), the CLI version and the labelling dates. The
+labels are committed later without the reason column (no document text).
+
 PRE-REGISTERED INCLUSION RULE (fixed before any labelling)
 ----------------------------------------------------------
 Primary rule (``ipc_detect.include_sections`` defaults): a document is in
@@ -22,12 +53,14 @@ The looser variant (``headnote_needs_explicit_body=False``: headnote mention
 plus any accepted body mention) is reported only as a sensitivity analysis
 on the same 55 documents. It is never used to choose the rule.
 
-Acceptance thresholds: Cohen's kappa >= 0.70 between the two annotators
-on the strict ``in_scope`` label (kappa on ``section_as_charge`` is reported,
-not a criterion), weighted inclusion precision of the primary rule against
-the strict label >= 0.90, headnote/body split accuracy >= 0.90. If the
-primary rule misses a threshold, the rule is changed and validated on a
-fresh 55 documents; the first 55 then count as development documents.
+Acceptance thresholds: Cohen's kappa >= 0.70 between the LLM and the human
+on the strict ``in_scope`` label over the 25-document overlap (kappa on
+``section_as_charge`` is reported, not a criterion), weighted inclusion
+precision of the primary rule against the strict label >= 0.90,
+headnote/body split accuracy >= 0.90. If the primary rule misses a detector
+threshold, the rule is changed and validated on a fresh 55 documents; the
+first 55 then count as development documents. If only the kappa criterion
+is missed, the verdict is INCOMPLETE until a human labels the other 30.
 
 Sample design
 -------------
@@ -55,17 +88,19 @@ Uncertainty: per-stratum proportions carry 95% Wilson intervals; the
 weighted pooled precision/recall and the split accuracy carry a 95%
 stratified percentile bootstrap (10,000 resamples, seeded by the sample
 seed). Acceptance is judged on the point estimates; intervals are reported
-beside them, because the pooled estimate rests on 8-15 labels per stratum.
+beside them, because the pooled estimate rests on 8-15 labels per stratum
+(5 per stratum in the 25-only sensitivity analysis).
 
 A separate 5-document calibration set (one per stratum, disjoint from the 55
 and from the dev documents) is labelled jointly first; it is not scored.
 
-Both annotators label the same 55 independently, blind to the detector
-output, following corpus/annotation_guideline.md.
-
 Usage (run only after the full extraction has finished):
-    python backend/corpus/validation.py sheet
-    python backend/corpus/validation.py score --a <sheet_A.csv> --b <sheet_B.csv> --adjudicated <adjudicated.csv>
+    python backend/corpus/validation.py sheet          # draws 55 + 5, writes key and calibration sheet
+    python backend/corpus/validation.py human-sheet    # adds human_subset to the key, writes the 25 sheet
+    python backend/corpus/llm_label.py --dry-run       # then without --dry-run: LLM labels for all 55
+    python backend/corpus/validation.py score --llm <validation_sheet_LLM.csv>
+        --human <validation_sheet_human_25.csv> --adjudicated <adjudicated_25.csv>
+        --log <adjudication_log.csv>       (one command; wrapped here)
 
 Files go to <work-dir>/validation/ (titles and IDs; no judgment text).
 """
@@ -97,6 +132,9 @@ from corpus.prefilter import section_group  # noqa: E402
 STRATA = ("weak_split", "collision", "rejected_flagged", "implicit_only", "explicit")
 QUOTAS = {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 12, "explicit": 15}
 SAMPLE_SIZE = sum(QUOTAS.values())  # 55
+HUMAN_PER_STRATUM = 5  # human subset: 5 per stratum = 25
+HUMAN_SUBSET_SEED_OFFSET = 2  # sample uses seed, calibration sheet seed + 1, human subset seed + 2
+HUMAN_SHEET = "validation_sheet_human_25.csv"
 FULL_SPLITS = ("jurisdiction+delivered", "jurisdiction+heading")
 DEFAULT_SEED = 20261127
 ACCEPTANCE = {"kappa": 0.70, "weighted_precision": 0.90, "split_accuracy": 0.90}
@@ -247,14 +285,13 @@ def make_sheets(work_dir: Path, seed: int = DEFAULT_SEED, dev_path: Path | None 
     short = [s for s in STRATA if sum(f["stratum"] == s for f in sample) < QUOTAS[s]]
 
     target = work_dir / "validation"
-    for name in ("A", "B"):
-        write_sheet(target / f"validation_sheet_{name}.csv", sample, candidates, texts, seed)
     write_sheet(target / "calibration_sheet.csv", calibration, candidates, texts, seed + 1)
     key = {
         "seed": seed, "rule": "primary: >=2 body mentions, or headnote + >=1 explicit body mention",
         "population": population, "quotas": QUOTAS, "short_strata": short,
         "excluded_dev_documents": len(exclude), "excluded_failed_pdfs": sorted(failed),
         "sample": sample, "calibration": calibration,
+        "human_subset_seed": seed + HUMAN_SUBSET_SEED_OFFSET, "human_subset": draw_human_subset(sample, seed),
     }
     (target / "validation_key.json").write_text(json.dumps(key, indent=1) + "\n", encoding="utf-8")
     out(f"Pool: {len(pool)} extracted candidates; excluded {len(exclude)} dev documents")
@@ -262,8 +299,42 @@ def make_sheets(work_dir: Path, seed: int = DEFAULT_SEED, dev_path: Path | None 
     out(f"Sample: {len(sample)} ({dict(Counter(f['stratum'] for f in sample))}); calibration: {len(calibration)}")
     if short:
         out(f"WARNING: strata below quota: {short}")
-    out(f"Wrote {target}/validation_sheet_A.csv, _B.csv, calibration_sheet.csv, validation_key.json "
-        "(keep the key away from the annotators)")
+    out(f"Wrote {target}/calibration_sheet.csv, validation_key.json (keep the key away from the annotators); "
+        "run `human-sheet` for the human sheet")
+    return key
+
+
+def draw_human_subset(sample: list[dict[str, Any]], seed: int) -> list[str]:
+    """HUMAN_PER_STRATUM doc_ids per stratum from the sample, seeded (seed + 2), order-independent."""
+    rng = random.Random(seed + HUMAN_SUBSET_SEED_OFFSET)
+    chosen = []
+    for s in STRATA:
+        members = sorted(i["doc_id"] for i in sample if i["stratum"] == s)
+        rng.shuffle(members)
+        chosen += sorted(members[:HUMAN_PER_STRATUM])
+    return chosen
+
+
+def make_human_sheet(work_dir: Path, out: Callable[[str], None] = print) -> dict[str, Any]:
+    """Record the human subset in the existing key (sample untouched) and write the blind 25-document sheet."""
+    target = work_dir / "validation"
+    key_path = target / "validation_key.json"
+    key = json.loads(key_path.read_text(encoding="utf-8"))
+    subset = draw_human_subset(key["sample"], key["seed"])
+    if "human_subset" in key and key["human_subset"] != subset:
+        raise ValueError("validation_key.json has a different human_subset than the seeded draw; refusing to overwrite")
+    short = [s for s in STRATA if sum(i["stratum"] == s and i["doc_id"] in subset for i in key["sample"])
+             < HUMAN_PER_STRATUM]
+    if "human_subset" not in key:
+        key["human_subset_seed"] = key["seed"] + HUMAN_SUBSET_SEED_OFFSET
+        key["human_subset"] = subset
+        key_path.write_text(json.dumps(key, indent=1) + "\n", encoding="utf-8")
+    candidates = {r["doc_id"]: r for r in load_records(work_dir / "candidates.jsonl")}
+    texts = {d: json.loads((work_dir / "text" / f"{d}.json").read_text(encoding="utf-8")) for d in subset}
+    items = [i for i in key["sample"] if i["doc_id"] in set(subset)]
+    path = target / HUMAN_SHEET
+    write_sheet(path, items, candidates, texts, key["human_subset_seed"])
+    out(f"Wrote {path}: {len(items)} documents" + (f"; WARNING: strata below {HUMAN_PER_STRATUM}: {short}" if short else ""))
     return key
 
 
@@ -549,8 +620,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, default=sc_source.DEFAULT_WORK_DIR)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("summary", help="aggregate detector counts over all candidates (no per-document output)")
-    sheet = sub.add_parser("sheet", help=f"draw the {SAMPLE_SIZE} + 5 and write blind sheets")
+    sheet = sub.add_parser("sheet", help=f"draw the {SAMPLE_SIZE} + 5, write the key and the calibration sheet")
     sheet.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    sub.add_parser("human-sheet", help=f"record the human subset in the key and write {HUMAN_SHEET}")
     scoring = sub.add_parser("score", help="agreement and detector metrics from labelled sheets")
     for flag in ("--a", "--b", "--adjudicated"):
         scoring.add_argument(flag, type=Path, required=True)
@@ -562,6 +634,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "sheet":
         make_sheets(work_dir, args.seed)
+        return 0
+    if args.command == "human-sheet":
+        make_human_sheet(work_dir)
         return 0
     key = json.loads((work_dir / "validation" / "validation_key.json").read_text(encoding="utf-8"))
     result = score(key, read_labels(args.a), read_labels(args.b), read_labels(args.adjudicated))

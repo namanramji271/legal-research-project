@@ -79,18 +79,48 @@ def test_make_sheets_end_to_end_blind(tmp_path: Path) -> None:
     key = v.make_sheets(tmp_path, seed=3, dev_path=dev, out=lambda _: None)
 
     out = tmp_path / "validation"
-    rows_a = list(csv.DictReader((out / "validation_sheet_A.csv").open(encoding="utf-8")))
-    rows_b = list(csv.DictReader((out / "validation_sheet_B.csv").open(encoding="utf-8")))
-    assert rows_a == rows_b and len(rows_a) == 55
-    assert tuple(rows_a[0]) == v.SHEET_COLUMNS
-    assert all(r["in_scope"] == "" and "stratum" not in r for r in rows_a)  # blind and empty
-    assert "explicit_00" not in {r["doc_id"] for r in rows_a}
+    assert not (out / "validation_sheet_A.csv").exists() and not (out / "validation_sheet_B.csv").exists()
+    assert len(key["sample"]) == 55 and "explicit_00" not in {i["doc_id"] for i in key["sample"]}
     assert len(list(csv.DictReader((out / "calibration_sheet.csv").open(encoding="utf-8")))) == 5
     assert key["short_strata"] == [] and key["excluded_dev_documents"] == 1
+    assert key["human_subset"] == v.draw_human_subset(key["sample"], 3) and key["human_subset_seed"] == 5
+
+    # The human sheet: 25 blind, empty rows from the recorded subset; sample unchanged.
+    sample_before = json.loads((out / "validation_key.json").read_text(encoding="utf-8"))["sample"]
+    v.make_human_sheet(tmp_path, out=lambda _: None)
+    rows = list(csv.DictReader((out / v.HUMAN_SHEET).open(encoding="utf-8")))
+    assert len(rows) == 25 and tuple(rows[0]) == v.SHEET_COLUMNS
+    assert all(r["in_scope"] == "" and r["section_as_charge"] == "" and "stratum" not in r for r in rows)
+    assert {r["doc_id"] for r in rows} == set(key["human_subset"])
+    assert json.loads((out / "validation_key.json").read_text(encoding="utf-8"))["sample"] == sample_before
     # The shuffled order does not group strata.
     strata = {i["doc_id"]: i["stratum"] for i in key["sample"]}
-    first_ten = {strata[r["doc_id"]] for r in rows_a[:10]}
-    assert len(first_ten) > 1
+    assert len({strata[r["doc_id"]] for r in rows[:8]}) > 1
+
+
+def test_human_subset_seeded_per_stratum_and_guarded(tmp_path: Path) -> None:
+    sample, _, _ = v.draw(pool(), seed=7, exclude=set())
+    subset = v.draw_human_subset(sample, 7)
+    strata = {i["doc_id"]: i["stratum"] for i in sample}
+    assert len(subset) == 25 and set(subset) <= set(strata)
+    assert {s: sum(strata[d] == s for d in subset) for s in v.STRATA} == {s: 5 for s in v.STRATA}
+    assert v.draw_human_subset(list(reversed(sample)), 7) == subset  # order-independent
+    assert v.draw_human_subset(sample, 8) != subset  # depends on the seed
+    # Adding the subset to a key without one; refusing a key whose subset differs.
+    (tmp_path / "validation").mkdir()
+    (tmp_path / "candidates.jsonl").write_text("", encoding="utf-8")
+    for d in subset:
+        (tmp_path / "text").mkdir(exist_ok=True)
+        (tmp_path / "text" / f"{d}.json").write_text(json.dumps({"doc_id": d, "body": "B"}), encoding="utf-8")
+    key_path = tmp_path / "validation" / "validation_key.json"
+    key_path.write_text(json.dumps({"seed": 7, "sample": sample}), encoding="utf-8")
+    key = v.make_human_sheet(tmp_path, out=lambda _: None)
+    assert key["human_subset"] == subset and key["human_subset_seed"] == 9
+    assert json.loads(key_path.read_text(encoding="utf-8"))["human_subset"] == subset
+    v.make_human_sheet(tmp_path, out=lambda _: None)  # idempotent
+    key_path.write_text(json.dumps({**key, "human_subset": subset[::-1]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="different human_subset"):
+        v.make_human_sheet(tmp_path, out=lambda _: None)
 
 
 def test_cohen_kappa_hand_computed() -> None:

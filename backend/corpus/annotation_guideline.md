@@ -2,19 +2,29 @@
 
 You will label Supreme Court judgments for two things: whether an in-scope
 IPC section is **at issue**, and whether the **headnote/body split** is
-correct. Two annotators label the same documents independently.
+correct. There are two annotators: an LLM labels all 55 validation
+documents, and a legally trained human labels a 25-document subset of them.
+Each works independently and follows this guideline.
 
 ## Before you start
 
-1. Label the 5-document **calibration sheet** together, discuss every
-   disagreement, and settle how you read this guideline. Calibration labels
-   are not scored.
-2. Then label the 55-document **validation sheet on your own**. Do not
-   discuss items until both sheets are finished.
-3. Read the PDF at `pdf_url`. You are not shown any detector output; do not
-   look for it (`validation_key.json` is not for annotators).
-4. The inclusion rule was fixed before labelling (see `validation.py`);
-   nothing you label changes it for these 55 documents.
+For the human annotator:
+
+1. Label the 5-document **calibration sheet** (`calibration_sheet.csv`)
+   first and discuss every item jointly with the project lead to settle how
+   you read this guideline. Calibration labels are not scored.
+2. Then label the 25-document **validation sheet**
+   (`validation_sheet_human_25.csv`) **on your own**. Do not discuss items or
+   look at any LLM labels until your sheet is finished.
+3. Read the PDF at `pdf_url`. You are not shown any detector output or stratum;
+   do not look for them (`validation_key.json` is not for annotators).
+4. The inclusion rule and this guideline were fixed before labelling (see
+   `validation.py`); nothing you label changes them for these documents.
+
+The LLM annotator labels all 55 documents, one document per fresh session,
+from the extracted text (headnote, body opening and full body) instead of
+the PDF. It never sees the key, the detector output or any other document's
+labels, and gives a one-sentence reason quoting the decisive sentence.
 
 ## Scope
 
@@ -124,7 +134,16 @@ the counsel list or later inside the judgment.
 
 ## Adjudication
 
-After both sheets are done, the annotators compare labels. For each
-disagreement they discuss and record one agreed label in
-`adjudicated.csv` (same columns). Disagreements and their resolution are
-kept, not overwritten.
+Only after the human sheet is finished are the LLM labels for those 25
+documents shown. For every disagreement (in `in_scope`, `section_as_charge`
+or `split_correct`) the human reads the LLM's reason and decides the final
+label; **the human label wins**. Record:
+
+- `adjudicated_25.csv`: the final labels for all 25 (same columns as the
+  sheet). Unchanged rows simply repeat the blind human label.
+- `adjudication_log.csv`: one row per disagreement, with columns `doc_id`,
+  `field`, `human_blind`, `llm`, `final`, `note` (why the final label was
+  kept or changed).
+
+The blind human sheet is kept as it was and not overwritten; agreement (κ)
+is computed on it, not on the adjudicated labels.
