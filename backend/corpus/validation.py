@@ -21,12 +21,18 @@ Sample design
 50 documents from the extracted candidates, excluding corpus/dev_docs.json,
 in five disjoint strata. Each document is assigned to the first stratum it
 matches, in this priority order:
-  no_marker (5)          headnote/body split found neither marker pair
-                         (split_method none, delivered or jurisdiction only)
+  weak_split (8)         any headnote/body split other than both markers
+                         (jurisdiction+delivered) or jurisdiction+heading:
+                         split_method none, delivered or jurisdiction only
   collision (10)         any IPC-range mention of 96-106 (accepted or rejected)
   rejected_flagged (10)  headnote pre-filter candidate the detector rejects
   implicit_only (15)     in scope only through implicit body mentions
-  explicit (10)          in scope with an explicit body mention
+  explicit (7)           in scope with an explicit body mention
+Documents whose PDF failed (pdf_pipeline.excluded_ids: failed, missing,
+extraction_failed) are excluded, as are the development documents.
+The split rules are frozen: they are not tuned on candidate documents any
+more, and any document inspected outside this protocol is added to
+corpus/dev_docs.json.
 The sample is therefore NOT natural prevalence. Per-stratum metrics are
 primary; pooled estimates are weighted by stratum population (N_s / n_s).
 
@@ -63,11 +69,11 @@ if str(BACKEND_DIR) not in sys.path:
 
 from corpus import sc_source  # noqa: E402
 from corpus.ipc_detect import PRIVATE_DEFENCE_RANGE, detect, include_sections  # noqa: E402
-from corpus.pdf_pipeline import load_dev_ids, load_records  # noqa: E402
+from corpus.pdf_pipeline import excluded_ids, load_dev_ids, load_records  # noqa: E402
 from corpus.prefilter import section_group  # noqa: E402
 
-STRATA = ("no_marker", "collision", "rejected_flagged", "implicit_only", "explicit")
-QUOTAS = {"no_marker": 5, "collision": 10, "rejected_flagged": 10, "implicit_only": 15, "explicit": 10}
+STRATA = ("weak_split", "collision", "rejected_flagged", "implicit_only", "explicit")
+QUOTAS = {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 15, "explicit": 7}
 FULL_SPLITS = ("jurisdiction+delivered", "jurisdiction+heading")
 DEFAULT_SEED = 20261127
 ACCEPTANCE = {"kappa": 0.70, "weighted_precision": 0.90, "split_accuracy": 0.90}
@@ -101,7 +107,7 @@ def features(record: dict[str, Any]) -> dict[str, Any]:
 
 def stratum(f: dict[str, Any]) -> str:
     if f["split_method"] not in FULL_SPLITS:
-        return "no_marker"
+        return "weak_split"
     if f["private_defence_range_mention"]:
         return "collision"
     if not f["primary_sections"]:
@@ -149,8 +155,11 @@ def write_sheet(path: Path, items: list[dict[str, Any]], metadata: dict[str, dic
 def make_sheets(work_dir: Path, seed: int = DEFAULT_SEED, dev_path: Path | None = None,
                 out: Callable[[str], None] = print) -> dict[str, Any]:
     candidates = {r["doc_id"]: r for r in load_records(work_dir / "candidates.jsonl")}
+    failed = excluded_ids(work_dir)
     texts, pool = {}, []
     for doc_id in candidates:
+        if doc_id in failed:
+            continue
         path = work_dir / "text" / f"{doc_id}.json"
         if not path.is_file():
             continue
@@ -172,7 +181,7 @@ def make_sheets(work_dir: Path, seed: int = DEFAULT_SEED, dev_path: Path | None 
     key = {
         "seed": seed, "rule": "primary: >=2 body mentions, or headnote + >=1 explicit body mention",
         "population": population, "quotas": QUOTAS, "short_strata": short,
-        "excluded_dev_documents": len(exclude),
+        "excluded_dev_documents": len(exclude), "excluded_failed_pdfs": sorted(failed),
         "sample": sample, "calibration": calibration,
     }
     (target / "validation_key.json").write_text(json.dumps(key, indent=1) + "\n", encoding="utf-8")

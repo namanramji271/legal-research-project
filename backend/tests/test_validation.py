@@ -22,20 +22,20 @@ BODIES = {
     # One implicit mention: below the primary rule (CPC s.100 here would be a collision instead).
     "rejected_flagged": IPC + "The prosecution referred once to section 302 for murder.",
     "collision": IPC + "Reliance on section 106 to shift the burden. Convicted under section 302 for murder.",
-    "no_marker": IPC + "Convicted under section 302 Indian Penal Code. Section 302 applies.",
+    "weak_split": IPC + "Convicted under section 302 Indian Penal Code. Section 302 applies.",
 }
 
 
 def record(doc_id: str, kind: str) -> dict:
     return {"doc_id": doc_id, "body": BODIES[kind], "headnote": "",
-            "split_method": "none" if kind == "no_marker" else "jurisdiction+delivered"}
+            "split_method": "none" if kind == "weak_split" else "jurisdiction+delivered"}
 
 
 def test_features_and_stratum_priority() -> None:
     assert {k: v.stratum(v.features(record("x", k))) for k in BODIES} == {k: k for k in BODIES}
-    # no_marker wins over everything else; collision over rejected/implicit/explicit.
+    # weak_split wins over everything else; collision over rejected/implicit/explicit.
     both = {**record("y", "collision"), "split_method": "delivered"}
-    assert v.stratum(v.features(both)) == "no_marker"
+    assert v.stratum(v.features(both)) == "weak_split"
 
 
 def pool(per_stratum: int = 30) -> list[dict]:
@@ -155,3 +155,26 @@ def test_read_labels_validates_values(tmp_path: Path) -> None:
     write_labels(tmp_path / "bad.csv", {"d1": ("maybe", "", "")})
     with pytest.raises(ValueError, match="yes/no/unsure"):
         v.read_labels(tmp_path / "bad.csv")
+
+
+def test_quotas_and_failed_pdfs_are_excluded(tmp_path: Path) -> None:
+    assert v.QUOTAS == {"weak_split": 8, "collision": 10, "rejected_flagged": 10, "implicit_only": 15, "explicit": 7}
+    assert sum(v.QUOTAS.values()) == 50
+    candidates = []
+    for kind in BODIES:
+        for i in range(16):
+            doc_id = f"{kind}_{i:02d}"
+            candidates.append({"doc_id": doc_id, "year": 1975})
+            path = tmp_path / "text" / f"{doc_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record(doc_id, kind)), encoding="utf-8")
+    (tmp_path / "candidates.jsonl").write_text("\n".join(json.dumps(c) for c in candidates), encoding="utf-8")
+    (tmp_path / "pdf_manifest.jsonl").write_text(
+        json.dumps({"doc_id": "explicit_01", "status": "ok"}) + "\n"
+        + json.dumps({"doc_id": "explicit_01", "status": "extraction_failed"}) + "\n", encoding="utf-8")
+    dev = tmp_path / "dev.json"
+    dev.write_text(json.dumps({"documents": []}), encoding="utf-8")
+    key = v.make_sheets(tmp_path, seed=3, dev_path=dev, out=lambda _: None)
+    drawn = {i["doc_id"] for i in key["sample"] + key["calibration"]}
+    assert "explicit_01" not in drawn and key["excluded_failed_pdfs"] == ["explicit_01"]
+    assert key["population"]["explicit"] == 15

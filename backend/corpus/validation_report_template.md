@@ -24,8 +24,13 @@ shown for reference only and are not population estimates.
 
 - Stratum populations (N_s): $population
 - Quotas (n_s): $quotas
-- Development documents (`corpus/dev_docs.json`) and the 5 calibration
-  documents are excluded.
+- Strata (disjoint, assigned in this order): weak_split (any split other than
+  both markers or jurisdiction+heading), collision (any 96–106 mention),
+  rejected_flagged, implicit_only, explicit.
+- Excluded: development documents (`corpus/dev_docs.json`), the 5
+  calibration documents, and PDFs that failed (failed, missing,
+  extraction_failed in the manifest).
+- The headnote/body split rules were frozen before this sample was drawn.
 - Documents labelled "unsure" by adjudication, excluded from detector metrics: $unsure
 
 ## Inter-annotator agreement
