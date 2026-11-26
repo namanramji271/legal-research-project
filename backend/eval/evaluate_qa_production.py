@@ -7,10 +7,13 @@ Run from the repository root with:
 Uses qa.ask_question() unchanged (RETRIEVER=bm25, full chunk text, 5 cases).
 The script swaps two qa.py hooks for the duration of the run only:
 - qa._call_gemini_with_retry -> disk cache (backend/eval/cache, shared with
-  evaluate_qa_v2.py via qa_cache.py) plus one Gemini attempt. A quota/429
-  error stops the run at once; any other error is retried once, like
-  production, then stops the run. The root exception is reported instead of
-  qa.py's generic 503.
+  evaluate_qa_v2.py via qa_cache.py) plus a Gemini call with a 60s request
+  timeout. A quota/429 error stops the run at once, with no retry. 503/504
+  (UNAVAILABLE/DEADLINE_EXCEEDED) and our own timeout are transient: retried
+  up to --max-transient-retries times (default 3), --backoff-seconds apart
+  (default 30), then the run stops. Any other error is retried once after 2s,
+  like production, then stops the run. The root exception is reported
+  instead of qa.py's generic 503, and each attempt prints a progress line.
 - qa.retrieve_cases -> a pass-through recorder that keeps the BM25 score of
   each retrieved case, which ask_question() does not return.
 
@@ -41,6 +44,11 @@ CONTEXT_MODE = "full"
 REQUIRED_RETRIEVER = "bm25"
 DEFAULT_DELAY_SECONDS = 15.0
 NON_QUOTA_RETRY_DELAY_SECONDS = 2.0  # same as qa._call_gemini_with_retry
+REQUEST_TIMEOUT_MS = 60_000
+DEFAULT_BACKOFF_SECONDS = 30.0
+DEFAULT_MAX_TRANSIENT_RETRIES = 3
+TRANSIENT_CODES = frozenset({503, 504})
+TRANSIENT_STATUSES = frozenset({"UNAVAILABLE", "DEADLINE_EXCEEDED"})
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -51,26 +59,106 @@ from eval import qa_cache  # noqa: E402
 from eval.refusal_patterns import is_insufficient_context  # noqa: E402
 
 
+def _timeout_exception_types() -> tuple[type[BaseException], ...]:
+    found = []
+    for name in ("httpx", "httpx2"):  # the SDK's sync transports
+        try:
+            found.append(__import__(name).TimeoutException)
+        except (ImportError, AttributeError):
+            pass
+    return tuple(found)
+
+
+TIMEOUT_EXCEPTIONS = _timeout_exception_types()
+
+
 def gemini_generate(prompt: str):
-    """One Gemini request, identical to the one in qa._call_gemini_with_retry."""
+    """One Gemini request: same model and temperature as qa._call_gemini_with_retry,
+    plus a 60s timeout. The SDK makes no retries of its own here (no retry_options)."""
     from google.genai import types
 
     return qa.client.models.generate_content(
         model=qa.MODEL_NAME,
         contents=prompt,
-        config=types.GenerateContentConfig(temperature=0),
+        config=types.GenerateContentConfig(
+            temperature=0,
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+        ),
     )
 
 
-def call_gemini(prompt: str, sleep: Callable[[float], None] = time.sleep):
-    """Stop on the first quota error; retry any other error once, like production."""
-    try:
-        return gemini_generate(prompt)
-    except Exception as error:
-        if qa_cache.is_quota_error(error):
+def classify_error(error: BaseException) -> str:
+    """'quota' (429), 'transient' (503/504, UNAVAILABLE/DEADLINE_EXCEEDED, our own
+    request timeout) or 'other'."""
+    if qa_cache.is_quota_error(error):
+        return "quota"
+    pending: BaseException | None = error
+    seen: set[int] = set()
+    while pending is not None and id(pending) not in seen:
+        seen.add(id(pending))
+        if TIMEOUT_EXCEPTIONS and isinstance(pending, TIMEOUT_EXCEPTIONS):
+            return "transient"
+        code = getattr(pending, "code", None)
+        status = str(getattr(pending, "status", "") or "").upper()
+        if code in TRANSIENT_CODES or status in TRANSIENT_STATUSES:
+            return "transient"
+        pending = pending.__cause__ or pending.__context__
+    return "other"
+
+
+def _error_text(error: BaseException) -> str:
+    info = qa_cache.describe_error(error)
+    status = f" {info['status']}" if info["status"] is not None else ""
+    return f"{info['type']}{status}: {info['message']}"
+
+
+def call_gemini(
+    prompt: str,
+    *,
+    label: str = "",
+    out: Callable[[str], None] = print,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
+    max_transient_retries: int = DEFAULT_MAX_TRANSIENT_RETRIES,
+    counters: dict[str, int] | None = None,
+):
+    """Quota: stop at once. Transient: retry up to max_transient_retries times,
+    backoff_seconds apart. Other: retry once after 2s, like production."""
+    counters = {} if counters is None else counters
+    transient_retries = 0
+    retried_other = False
+    attempt = 0
+    while True:
+        attempt += 1
+        out(f"{label}: Gemini call start (attempt {attempt})")
+        started = clock()
+        try:
+            response = gemini_generate(prompt)
+        except Exception as error:
+            kind = classify_error(error)
+            head = f"{label}: {_error_text(error)} after {clock() - started:.1f}s"
+            if kind == "transient" and transient_retries < max_transient_retries:
+                transient_retries += 1
+                counters["transient_retries"] = counters.get("transient_retries", 0) + 1
+                out(f"{head}; transient, retrying in {backoff_seconds:g}s "
+                    f"(retry {transient_retries}/{max_transient_retries})")
+                sleep(backoff_seconds)
+                continue
+            if kind == "other" and not retried_other:
+                retried_other = True
+                out(f"{head}; retrying once in {NON_QUOTA_RETRY_DELAY_SECONDS:g}s")
+                sleep(NON_QUOTA_RETRY_DELAY_SECONDS)
+                continue
+            reason = {
+                "quota": "quota error, stopping without retry",
+                "transient": f"transient retries exhausted ({transient_retries}), stopping",
+                "other": "failed again after one retry, stopping",
+            }[kind]
+            out(f"{head}; {reason}")
             raise
-        sleep(NON_QUOTA_RETRY_DELAY_SECONDS)
-        return gemini_generate(prompt)
+        out(f"{label}: Gemini returned in {clock() - started:.1f}s")
+        return response
 
 
 def ordered_questions(
@@ -142,10 +230,13 @@ def run(
     only: str | None = None,
     dry_run: bool = False,
     delay_seconds: float = DEFAULT_DELAY_SECONDS,
+    backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
+    max_transient_retries: int = DEFAULT_MAX_TRANSIENT_RETRIES,
     cache_dir: Path = qa_cache.CACHE_DIR,
     results_path: Path = RESULTS_PATH,
     findings_path: Path = FINDINGS_PATH,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
     out: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     retriever = config.SETTINGS.retriever
@@ -190,38 +281,53 @@ def run(
         return {"status": "dry_run", "uncached_calls_before_run": uncached_before}
 
     # Pass 2: the real run.
-    stats = {"gemini_calls": 0, "cache_hits": 0}
+    stats = {"gemini_calls": 0, "cache_hits": 0, "transient_retries": 0}
     last_call_at: list[float] = []
+    label = [""]
 
     def cached_gemini(prompt: str):
         key = qa_cache.cache_key(qa.MODEL_NAME, prompt)
         cached = qa_cache.read_cached_answer(key, cache_dir)
         if cached is not None:
             stats["cache_hits"] += 1
-            return SimpleNamespace(text=cached, from_cache=True)
+            out(f"{label[0]}: cached answer")
+            return SimpleNamespace(text=cached)
         if last_call_at and delay_seconds:
-            wait = delay_seconds - (time.monotonic() - last_call_at[-1])
+            wait = delay_seconds - (clock() - last_call_at[-1])
             if wait > 0:
                 sleep(wait)
-        last_call_at.append(time.monotonic())
-        response = call_gemini(prompt, sleep=sleep)
+        last_call_at.append(clock())
+        response = call_gemini(
+            prompt,
+            label=label[0],
+            out=out,
+            sleep=sleep,
+            clock=clock,
+            backoff_seconds=backoff_seconds,
+            max_transient_retries=max_transient_retries,
+            counters=stats,
+        )
         answer = str(getattr(response, "text", "") or "")
         qa_cache.write_cached_answer(key, qa.MODEL_NAME, answer, cache_dir)
         stats["gemini_calls"] += 1
-        return SimpleNamespace(text=answer, from_cache=False)
+        return SimpleNamespace(text=answer)
 
     results: list[dict[str, Any]] = []
     status = "complete"
     error_info: dict[str, Any] | None = None
     with _Hooks(cached_gemini) as hooks:
         for number, entry in selected:
+            label[0] = f"Q{number:02d}"
             calls_before = stats["gemini_calls"]
+            retries_before = stats["transient_retries"]
             try:
                 response = _ask(hooks, entry["question"])
             except Exception as error:
                 error_info = qa_cache.describe_error(error)
+                error_info["kind"] = classify_error(error)
                 error_info["question_number"] = number
-                status = "quota_exhausted" if error_info["quota"] else "stopped_on_error"
+                error_info["transient_retries"] = stats["transient_retries"] - retries_before
+                status = "quota_exhausted" if error_info["kind"] == "quota" else "stopped_on_error"
                 out(
                     f"Q{number:02d}: stopped ({status}): {error_info['type']}"
                     f"{' ' + str(error_info['status']) if error_info['status'] is not None else ''}"
@@ -245,6 +351,7 @@ def run(
                     "decline_match": declined != expected,
                     "cache_key": hooks.last_key,
                     "gemini_called_this_run": stats["gemini_calls"] > calls_before,
+                    "transient_retries": stats["transient_retries"] - retries_before,
                 }
             )
             out(
@@ -267,6 +374,10 @@ def run(
         "uncached_calls_before_run": uncached_before,
         "gemini_calls_this_run": stats["gemini_calls"],
         "cache_hits": stats["cache_hits"],
+        "transient_retries_total": stats["transient_retries"],
+        "request_timeout_seconds": REQUEST_TIMEOUT_MS / 1000,
+        "backoff_seconds": backoff_seconds,
+        "max_transient_retries": max_transient_retries,
         "uncached_calls_remaining": uncached_before - stats["gemini_calls"],
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "results": results,
@@ -301,11 +412,15 @@ def _findings_markdown(report: dict[str, Any]) -> str:
         + (f" (`--only {report['only']}`)" if report["only"] else ""),
         f"- Gemini calls this run: {report['gemini_calls_this_run']}; cache hits: {report['cache_hits']}; "
         f"uncached calls remaining: {report['uncached_calls_remaining']}",
+        f"- Transient retries (503/504/timeout): {report['transient_retries_total']} "
+        f"(request timeout {report['request_timeout_seconds']:g}s, backoff {report['backoff_seconds']:g}s, "
+        f"max {report['max_transient_retries']} per call)",
     ]
     if report["error"]:
         error = report["error"]
         lines.append(
-            f"- Stopped at Q{error['question_number']}: `{error['type']}` "
+            f"- Stopped at Q{error['question_number']} ({error['kind']} error, "
+            f"after {error['transient_retries']} transient retries): `{error['type']}` "
             f"(status {error['status']}): {error['message']}"
         )
     lines += [
@@ -322,8 +437,8 @@ def _findings_markdown(report: dict[str, Any]) -> str:
         "",
         "## Per-question outcomes",
         "",
-        "| # | Expected | Declined | Match | Verified | Retrieved cases (BM25 score) |",
-        "| ---: | --- | --- | --- | --- | --- |",
+        "| # | Expected | Declined | Match | Verified | Retries | Retrieved cases (BM25 score) |",
+        "| ---: | --- | --- | --- | --- | ---: | --- |",
     ]
     for r in results:
         cases = ", ".join(
@@ -332,7 +447,8 @@ def _findings_markdown(report: dict[str, Any]) -> str:
         ) or "none"
         expected = "answerable" if r["expected_answerable"] else "unanswerable"
         lines.append(
-            f"| {r['number']} | {expected} | {r['declined']} | {r['decline_match']} | {r['verified']} | {cases} |"
+            f"| {r['number']} | {expected} | {r['declined']} | {r['decline_match']} | {r['verified']} "
+            f"| {r['transient_retries']} | {cases} |"
         )
     lines += ["", "## Answers", ""]
     for r in results:
@@ -352,12 +468,35 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_DELAY_SECONDS,
         help=f"pause between uncached Gemini calls (default: {DEFAULT_DELAY_SECONDS:g})",
     )
+    parser.add_argument(
+        "--backoff-seconds",
+        type=float,
+        default=DEFAULT_BACKOFF_SECONDS,
+        help=f"wait before retrying a 503/504/timeout (default: {DEFAULT_BACKOFF_SECONDS:g})",
+    )
+    parser.add_argument(
+        "--max-transient-retries",
+        type=int,
+        default=DEFAULT_MAX_TRANSIENT_RETRIES,
+        help=f"retries per call for 503/504/timeout (default: {DEFAULT_MAX_TRANSIENT_RETRIES})",
+    )
     args = parser.parse_args(argv)
     if args.delay_seconds < 0:
         parser.error("--delay-seconds must be non-negative")
+    if args.backoff_seconds < 0:
+        parser.error("--backoff-seconds must be non-negative")
+    if args.max_transient_retries < 0:
+        parser.error("--max-transient-retries must be non-negative")
     questions = json.loads(QUESTIONS_PATH.read_text(encoding="utf-8"))
     try:
-        report = run(questions, only=args.only, dry_run=args.dry_run, delay_seconds=args.delay_seconds)
+        report = run(
+            questions,
+            only=args.only,
+            dry_run=args.dry_run,
+            delay_seconds=args.delay_seconds,
+            backoff_seconds=args.backoff_seconds,
+            max_transient_retries=args.max_transient_retries,
+        )
     except RuntimeError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
