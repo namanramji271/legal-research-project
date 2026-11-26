@@ -111,10 +111,10 @@ def test_metrics_per_stratum_weighted_and_sensitivity() -> None:
         {"doc_id": "r1", "stratum": "rejected_flagged", "primary_sections": [], "loose_sections": ["304"]},
         {"doc_id": "r2", "stratum": "rejected_flagged", "primary_sections": [], "loose_sections": []},
     ]
-    gold = {"e1": {"in_scope": "yes", "sections": {"302"}, "split_correct": "yes"},
-            "e2": {"in_scope": "no", "sections": set(), "split_correct": "no"},
-            "r1": {"in_scope": "yes", "sections": {"304"}, "split_correct": "yes"},
-            "r2": {"in_scope": "unsure", "sections": set(), "split_correct": "na"}}
+    gold = {"e1": {"in_scope": "yes", "section_as_charge": "no", "sections": {"302"}, "split_correct": "yes"},
+            "e2": {"in_scope": "no", "section_as_charge": "yes", "sections": set(), "split_correct": "no"},
+            "r1": {"in_scope": "yes", "section_as_charge": "no", "sections": {"304"}, "split_correct": "yes"},
+            "r2": {"in_scope": "unsure", "section_as_charge": "no", "sections": set(), "split_correct": "na"}}
     population = {"explicit": 100, "rejected_flagged": 10}
     m = v.detector_metrics(items, gold, population, "primary")
     assert m["per_stratum"]["explicit"] == {"n": 2, "tp": 1, "fp": 1, "fn": 0, "tn": 0, "precision": 0.5, "recall": 1.0}
@@ -124,37 +124,73 @@ def test_metrics_per_stratum_weighted_and_sensitivity() -> None:
     assert m["section_level_unweighted"]["304"]["fn"] == 1
     loose = v.detector_metrics(items, gold, population, "loose")
     assert loose["per_stratum"]["rejected_flagged"]["tp"] == 1
+    # Loose gold label: e2 (charge only) counts as in scope, so the explicit stratum is all TP.
+    lab = v.detector_metrics(items, gold, population, "primary", label="loose")
+    assert lab["label"] == "loose" and lab["per_stratum"]["explicit"]["precision"] == 1.0
+    assert lab["pooled_weighted"]["precision"] == 1.0
     assert v.split_accuracy(items, gold)["accuracy"] == round(2 / 3, 4)
 
 
-def write_labels(path: Path, labels: dict[str, tuple[str, str, str]]) -> None:
+def write_labels(path: Path, labels: dict[str, tuple[str, str, str, str]]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=v.SHEET_COLUMNS)
         w.writeheader()
-        for i, (doc_id, (scope, sections, split)) in enumerate(labels.items(), start=1):
-            w.writerow({"item": i, "doc_id": doc_id, "in_scope": scope, "sections_at_issue": sections,
-                        "split_correct": split})
+        for i, (doc_id, (scope, charge, sections, split)) in enumerate(labels.items(), start=1):
+            w.writerow({"item": i, "doc_id": doc_id, "in_scope": scope, "section_as_charge": charge,
+                        "sections_at_issue": sections, "split_correct": split})
 
 
 def test_score_and_report_end_to_end(tmp_path: Path) -> None:
     key = {"seed": 1, "population": {"explicit": 20, "implicit_only": 20}, "quotas": v.QUOTAS,
            "sample": [{"doc_id": f"d{i}", "stratum": "explicit" if i < 2 else "implicit_only",
                        "primary_sections": ["302"], "loose_sections": ["302"]} for i in range(4)]}
-    labels = {f"d{i}": ("yes", "302", "yes") for i in range(4)}
+    labels = {f"d{i}": ("yes", "no", "302", "yes") for i in range(4)}
     for name in ("a", "b", "adj"):
         write_labels(tmp_path / f"{name}.csv", labels)
     result = v.score(key, *(v.read_labels(tmp_path / f"{n}.csv") for n in ("a", "b", "adj")))
-    assert result["kappa"] is None  # all identical labels: kappa undefined, check fails
+    assert result["agreement"]["in_scope"]["kappa"] is None  # all identical labels: kappa undefined, check fails
+    assert result["agreement"]["section_as_charge"] == {"kappa": None, "raw_agreement": 1.0}
     assert result["checks"] == {"kappa": False, "weighted_precision": True, "split_accuracy": True}
     report = v.render_report(result, key)
-    assert "Pre-registered rule" in report and "not used to choose the rule" in report
+    assert "Pre-registered labels" in report and "not used to choose the rule" in report
+    assert "against the loose label" in report and "section_as_charge" in report
     assert "NOT ACCEPTED" in report and "fresh 55" in report
 
 
 def test_read_labels_validates_values(tmp_path: Path) -> None:
-    write_labels(tmp_path / "bad.csv", {"d1": ("maybe", "", "")})
+    write_labels(tmp_path / "bad.csv", {"d1": ("maybe", "no", "", "")})
     with pytest.raises(ValueError, match="yes/no/unsure"):
         v.read_labels(tmp_path / "bad.csv")
+    write_labels(tmp_path / "blank.csv", {"d1": ("no", "", "", "")})
+    with pytest.raises(ValueError, match="section_as_charge must be yes/no"):
+        v.read_labels(tmp_path / "blank.csv")
+    write_labels(tmp_path / "both.csv", {"d1": ("yes", "yes", "302", "")})
+    with pytest.raises(ValueError, match="must be no when in_scope is yes"):
+        v.read_labels(tmp_path / "both.csv")
+
+
+def test_gold_views_and_kappa_on_both_fields(tmp_path: Path) -> None:
+    assert v.gold_in_scope({"in_scope": "no", "section_as_charge": "yes"}) is False
+    assert v.gold_in_scope({"in_scope": "no", "section_as_charge": "yes"}, "loose") is True
+    assert v.gold_in_scope({"in_scope": "unsure", "section_as_charge": "yes"}, "loose") is True
+    assert v.gold_in_scope({"in_scope": "unsure", "section_as_charge": "no"}, "loose") is None
+    with pytest.raises(ValueError):
+        v.gold_in_scope({"in_scope": "yes"}, "other")
+    key = {"seed": 1, "population": {"explicit": 10}, "quotas": v.QUOTAS,
+           "sample": [{"doc_id": f"d{i}", "stratum": "explicit", "primary_sections": ["302"],
+                       "loose_sections": ["302"]} for i in range(4)]}
+    a = {"d0": ("yes", "no", "302", "yes"), "d1": ("no", "yes", "", "yes"),
+         "d2": ("no", "yes", "", "yes"), "d3": ("no", "no", "", "yes")}
+    b = {**a, "d3": ("no", "yes", "", "yes")}  # disagree on section_as_charge only
+    for name, labels in (("a", a), ("b", b), ("adj", a)):
+        write_labels(tmp_path / f"{name}.csv", labels)
+    result = v.score(key, *(v.read_labels(tmp_path / f"{n}.csv") for n in ("a", "b", "adj")))
+    assert result["agreement"]["in_scope"]["kappa"] == 1.0
+    # section_as_charge: a = n,y,y,n; b = n,y,y,y -> p_o 0.75, p_e 0.5*0.25 + 0.5*0.75 = 0.5
+    assert result["agreement"]["section_as_charge"] == {"kappa": 0.5, "raw_agreement": 0.75}
+    assert result["primary"]["pooled_weighted"]["precision"] == 0.25
+    assert result["secondary_loose_label"]["pooled_weighted"]["precision"] == 0.75
+    assert result["checks"]["weighted_precision"] is False  # acceptance uses the strict label
 
 
 def test_quotas_and_failed_pdfs_are_excluded(tmp_path: Path) -> None:

@@ -23,14 +23,25 @@ In-scope sections: **IPC 96–106** (private defence) and **IPC 299–304**
 Section 304A (death by negligence), 304B (dowry death) and 307 (attempt to
 murder) are **out of scope**.
 
-A section is **at issue** when the court has to apply or decide it in this
-case, for example:
-- the accused was charged, convicted, acquitted or sentenced under it in the
-  proceedings before the court;
-- the court analyses its ingredients or limits to reach the outcome (e.g.
-  whether the right of private defence under s. 100 extended to causing
-  death; whether the act falls under s. 300 "thirdly" or s. 304 Part II);
-- the court alters a conviction from one in-scope section to another.
+`in_scope` is a **strict** label. A section is **at issue** only when the
+court decides or reasons about it in this case:
+- conviction, acquittal or sentence under it is what the court decides
+  (upholding, setting aside or altering it);
+- the court analyses its elements or limits to reach the outcome (e.g.
+  whether the act falls under s. 300 "thirdly" or s. 304 Part II; murder vs
+  culpable homicide not amounting to murder);
+- the court decides a private-defence plea (e.g. whether the right under
+  s. 100 extended to causing death);
+- the court decides whether a charge under it should be framed, altered or
+  quashed.
+
+A section is **the charge only** (`section_as_charge = yes`, `in_scope = no`)
+when it is the charge in the case, or is mentioned as the charge, but the
+court decides something else: bail, a witness-protection order, juvenility,
+summoning an additional accused (CrPC s. 319), recalling a witness, the
+prosecution of someone else, or the section appears only in a recital of the
+FIR or chargesheet. See Example 4. The strict/loose split was pre-registered
+before labelling: detector precision is judged against the strict label.
 
 A section is a **passing mention** when it appears but the court does not
 apply it to this case, for example:
@@ -52,7 +63,8 @@ separately; the note lets that happen without relabelling.
 
 | Field | Values | Meaning |
 | --- | --- | --- |
-| `in_scope` | `yes` / `no` / `unsure` | `yes` if at least one in-scope IPC section is at issue. Use `unsure` sparingly and explain in `notes`. |
+| `in_scope` | `yes` / `no` / `unsure` | Strict: `yes` if the court decides or reasons about at least one in-scope IPC section. Use `unsure` sparingly and explain in `notes`. |
+| `section_as_charge` | `yes` / `no` | `yes` if an in-scope section is the charge (or mentioned as the charge) but the court does not decide it. Always fill it in; it must be `no` when `in_scope` is `yes`. |
 | `sections_at_issue` | e.g. `302;304` | In-scope sections at issue, separated by `;`. Empty if `in_scope` is `no`. |
 | `passing_sections` | e.g. `300` | In-scope sections mentioned only in passing. |
 | `split_correct` | `yes` / `no` / `na` | Does `body_starts_with` match where the judgment itself begins (usually the authoring judge, e.g. "KHANNA, J."), after the headnote and the list of counsel? `na` if the PDF has no headnote. |
@@ -66,24 +78,41 @@ These are paraphrased, not quoted.
 court under "section 302 read with section 34". The Supreme Court examines
 whether the injuries show an intention to cause death, holds that the case
 falls within s. 304 Part I, and alters the conviction.
-→ `in_scope = yes`, `sections_at_issue = 302;304`. Section 34 is not in scope
-and is not listed.
+→ `in_scope = yes`, `section_as_charge = no`,
+`sections_at_issue = 302;304`. Section 34 is not in scope and is not listed.
 
 **Example 2: passing mention only (not in scope).** A dowry-death appeal
 under s. 304B; the judgment cites an earlier murder case "decided under
 s. 302" for the standard of circumstantial evidence and quotes "s. 106 of the
 Evidence Act" on the burden of proof.
-→ `in_scope = no`, `passing_sections = 302`. 304B is out of scope; Evidence
-Act s. 106 is not an IPC mention at all.
+→ `in_scope = no`, `section_as_charge = no`, `passing_sections = 302`.
+304B is out of scope; Evidence Act s. 106 is not an IPC mention at all.
 
 **Example 3: private defence at issue, with collisions.** The defence pleads
 that the accused acted in exercise of the right of private defence. The court
 discusses "ss. 96 to 102" and whether the right extended to causing death
 under s. 100, and also refers to "s. 105 of the Evidence Act" (the accused
 must prove the plea). The conviction under s. 302 is upheld.
-→ `in_scope = yes`, `sections_at_issue = 100;302` (add 96–102 if the court
-actually applies them, not when they are only listed). Evidence Act s. 105 is
-not listed anywhere.
+→ `in_scope = yes`, `section_as_charge = no`, `sections_at_issue = 100;302`
+(add 96–102 if the court actually applies them, not when they are only
+listed). Evidence Act s. 105 is not listed anywhere.
+
+**Example 4: the charge only (strict no, charge yes).** The section is the
+charge, but the court decides something else. Typical phrasings:
+- "The appellant, accused of an offence under Section 302 IPC, seeks bail
+  under Section 439 CrPC." (also: an order against threats to witnesses)
+- "The question is whether the accused in the FIR under Section 302 IPC was
+  a juvenile on the date of the offence."
+- "The investigating officer in the murder case was prosecuted for
+  demanding a bribe."
+- "The application under Section 319 CrPC to summon additional accused in
+  the trial under Section 302 IPC" (or an order recalling a witness).
+- "The chargesheet was filed under Sections 302 and 34 IPC." with nothing
+  further decided on s. 302.
+→ `in_scope = no`, `section_as_charge = yes`, `sections_at_issue` empty,
+`passing_sections = 302`. If the court then also decides the conviction or
+the framing of the s. 302 charge, it is Example 1 instead
+(`in_scope = yes`, `section_as_charge = no`).
 
 ## Split check
 

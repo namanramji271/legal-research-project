@@ -1,5 +1,17 @@
 """Hand validation of the corpus v2 IPC detector and headnote/body split.
 
+PRE-REGISTERED LABELS (fixed before any labelling)
+--------------------------------------------------
+``in_scope`` is the STRICT label and the primary gold standard: yes when the
+court decides or reasons about an in-scope IPC section (conviction,
+acquittal, sentence, its elements, murder vs culpable homicide, private
+defence, framing or quashing of the charge). ``section_as_charge`` (yes/no)
+marks documents where the section is the charge, or is mentioned as the
+charge, but the court does not decide it (bail, juvenility, s.319 CrPC,
+witness recall, a chargesheet recital). The LOOSE label (strict yes or
+section_as_charge yes) is a secondary gold standard, reported alongside;
+acceptance is judged against the strict label only.
+
 PRE-REGISTERED INCLUSION RULE (fixed before any labelling)
 ----------------------------------------------------------
 Primary rule (``ipc_detect.include_sections`` defaults): a document is in
@@ -11,8 +23,9 @@ plus any accepted body mention) is reported only as a sensitivity analysis
 on the same 55 documents. It is never used to choose the rule.
 
 Acceptance thresholds: Cohen's kappa >= 0.70 between the two annotators
-(document-level in scope / not in scope), weighted inclusion precision of
-the primary rule >= 0.90, headnote/body split accuracy >= 0.90. If the
+on the strict ``in_scope`` label (kappa on ``section_as_charge`` is reported,
+not a criterion), weighted inclusion precision of the primary rule against
+the strict label >= 0.90, headnote/body split accuracy >= 0.90. If the
 primary rule misses a threshold, the rule is changed and validated on a
 fresh 55 documents; the first 55 then count as development documents.
 
@@ -85,9 +98,11 @@ TEMPLATE_PATH = Path(__file__).with_name("validation_report_template.md")
 SHEET_COLUMNS = (
     "item", "doc_id", "title", "citation", "pdf_url", "body_starts_with",
     # Annotator fields:
-    "in_scope", "sections_at_issue", "passing_sections", "split_correct", "notes",
+    "in_scope", "section_as_charge", "sections_at_issue", "passing_sections", "split_correct", "notes",
 )
-LABEL_VALUES = {"in_scope": ("yes", "no", "unsure"), "split_correct": ("yes", "no", "na")}
+LABEL_VALUES = {"in_scope": ("yes", "no", "unsure"), "section_as_charge": ("yes", "no"),
+                "split_correct": ("yes", "no", "na")}
+GOLD_LABELS = ("strict", "loose")
 
 
 # --- features and strata ------------------------------------------------------
@@ -196,7 +211,7 @@ def write_sheet(path: Path, items: list[dict[str, Any]], metadata: dict[str, dic
                 "item": i, "doc_id": item["doc_id"], "title": meta.get("title", ""),
                 "citation": meta.get("citation", ""), "pdf_url": meta.get("pdf_url", ""),
                 "body_starts_with": _body_start(texts[item["doc_id"]]),
-                "in_scope": "", "sections_at_issue": "", "passing_sections": "", "split_correct": "", "notes": "",
+                "in_scope": "", "section_as_charge": "", "sections_at_issue": "", "passing_sections": "", "split_correct": "", "notes": "",
             })
 
 
@@ -249,14 +264,21 @@ def read_labels(path: Path) -> dict[str, dict[str, Any]]:
     labels = {}
     with path.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
+            where = f"{path.name} item {row.get('item')}"
             in_scope = row["in_scope"].strip().lower()
+            charge = row.get("section_as_charge", "").strip().lower()
             split = row.get("split_correct", "").strip().lower()
             if in_scope not in LABEL_VALUES["in_scope"]:
-                raise ValueError(f"{path.name} item {row.get('item')}: in_scope must be yes/no/unsure, got {in_scope!r}")
+                raise ValueError(f"{where}: in_scope must be yes/no/unsure, got {in_scope!r}")
+            if charge not in LABEL_VALUES["section_as_charge"]:
+                raise ValueError(f"{where}: section_as_charge must be yes/no, got {charge!r}")
+            if in_scope == "yes" and charge == "yes":
+                raise ValueError(f"{where}: section_as_charge must be no when in_scope is yes (the court decides it)")
             if split and split not in LABEL_VALUES["split_correct"]:
-                raise ValueError(f"{path.name} item {row.get('item')}: split_correct must be yes/no/na")
+                raise ValueError(f"{where}: split_correct must be yes/no/na")
             labels[row["doc_id"]] = {
                 "in_scope": in_scope,
+                "section_as_charge": charge,
                 "sections": {s for s in re.findall(r"\d{2,3}", row.get("sections_at_issue", ""))},
                 "split_correct": split or "na",
             }
@@ -287,16 +309,30 @@ def _prf(pairs: Iterable[tuple[bool, bool]]) -> dict[str, Any]:
             "recall": round(tp / (tp + fn), 4) if tp + fn else None}
 
 
+def gold_in_scope(label: dict[str, Any], view: str = "strict") -> bool | None:
+    """Document-level gold value: strict = in_scope; loose = in_scope or section_as_charge. None = unsure."""
+    if view not in GOLD_LABELS:
+        raise ValueError(f"gold label view must be one of {GOLD_LABELS}")
+    if view == "loose" and label.get("section_as_charge") == "yes":
+        return True
+    return {"yes": True, "no": False}.get(label["in_scope"])
+
+
 def detector_metrics(items: list[dict[str, Any]], gold: dict[str, dict], population: dict[str, int],
-                     rule: str = "primary") -> dict[str, Any]:
-    """Per-stratum and weighted pooled document-level precision/recall; section-level by group."""
+                     rule: str = "primary", label: str = "strict") -> dict[str, Any]:
+    """Per-stratum and weighted pooled document-level precision/recall; section-level by group.
+
+    ``rule`` picks the detector rule (primary / loose sensitivity variant);
+    ``label`` picks the gold standard (strict in_scope / loose with section_as_charge).
+    """
     key = "primary_sections" if rule == "primary" else "loose_sections"
-    scored = [i for i in items if gold[i["doc_id"]]["in_scope"] in ("yes", "no")]
+    truth = {i["doc_id"]: gold_in_scope(gold[i["doc_id"]], label) for i in items}
+    scored = [i for i in items if truth[i["doc_id"]] is not None]
     per_stratum = {}
     weighted = Counter()
     for s in STRATA:
         members = [i for i in scored if i["stratum"] == s]
-        pairs = [(bool(i[key]), gold[i["doc_id"]]["in_scope"] == "yes") for i in members]
+        pairs = [(bool(i[key]), truth[i["doc_id"]]) for i in members]
         per_stratum[s] = {"n": len(members), **_prf(pairs)}
         w = population.get(s, 0) / len(members) if members else 0.0
         for k in ("tp", "fp", "fn", "tn"):
@@ -313,9 +349,9 @@ def detector_metrics(items: list[dict[str, Any]], gold: dict[str, dict], populat
             actual = {s for s in gold[i["doc_id"]]["sections"] if section_group(s) == group}
             pairs += [(s in predicted, s in actual) for s in predicted | actual]
         sections[group] = _prf(pairs)
-    return {"rule": rule, "scored": len(scored), "unsure_excluded": len(items) - len(scored),
+    return {"rule": rule, "label": label, "scored": len(scored), "unsure_excluded": len(items) - len(scored),
             "per_stratum": per_stratum, "pooled_weighted": pooled_weighted,
-            "pooled_unweighted": _prf((bool(i[key]), gold[i["doc_id"]]["in_scope"] == "yes") for i in scored),
+            "pooled_unweighted": _prf((bool(i[key]), truth[i["doc_id"]]) for i in scored),
             "section_level_unweighted": sections}
 
 
@@ -334,17 +370,24 @@ def score(key: dict[str, Any], a: dict, b: dict, adjudicated: dict) -> dict[str,
     missing = [d for d in ids if d not in a or d not in b or d not in adjudicated]
     if missing:
         raise ValueError(f"labels missing for: {missing}")
-    kappa = cohen_kappa([a[d]["in_scope"] for d in ids], [b[d]["in_scope"] for d in ids])
-    primary = detector_metrics(items, adjudicated, key["population"], "primary")
-    loose = detector_metrics(items, adjudicated, key["population"], "loose")
+    agreement = {}
+    for field in ("in_scope", "section_as_charge"):
+        xa, xb = [a[d][field] for d in ids], [b[d][field] for d in ids]
+        agreement[field] = {"kappa": cohen_kappa(xa, xb),
+                            "raw_agreement": round(sum(x == y for x, y in zip(xa, xb)) / len(ids), 4)}
+    pop = key["population"]
+    primary = detector_metrics(items, adjudicated, pop, "primary", "strict")
+    secondary = detector_metrics(items, adjudicated, pop, "primary", "loose")
+    sensitivity = detector_metrics(items, adjudicated, pop, "loose", "strict")
     split = split_accuracy(items, adjudicated)
+    kappa = agreement["in_scope"]["kappa"]
     checks = {
         "kappa": kappa is not None and kappa >= ACCEPTANCE["kappa"],
         "weighted_precision": (primary["pooled_weighted"]["precision"] or 0) >= ACCEPTANCE["weighted_precision"],
         "split_accuracy": (split["accuracy"] or 0) >= ACCEPTANCE["split_accuracy"],
     }
-    return {"kappa": kappa, "raw_agreement": round(sum(a[d]["in_scope"] == b[d]["in_scope"] for d in ids) / len(ids), 4),
-            "primary": primary, "sensitivity_loose": loose, "split": split,
+    return {"agreement": agreement, "primary": primary, "secondary_loose_label": secondary,
+            "sensitivity_loose_rule": sensitivity, "split": split,
             "acceptance": ACCEPTANCE, "checks": checks, "accepted": all(checks.values())}
 
 
@@ -356,17 +399,23 @@ def _table(metrics: dict[str, Any]) -> str:
 
 
 def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
-    primary, loose = result["primary"], result["sensitivity_loose"]
+    primary, secondary = result["primary"], result["secondary_loose_label"]
+    loose = result["sensitivity_loose_rule"]
+    agreement = result["agreement"]
     sections = "\n".join(
         f"| {g} | {m['tp']} | {m['fp']} | {m['fn']} | {m['precision']} | {m['recall']} |"
         for g, m in primary["section_level_unweighted"].items()
     )
     return Template(TEMPLATE_PATH.read_text(encoding="utf-8")).substitute(
         seed=key["seed"], population=json.dumps(key["population"]), quotas=json.dumps(key["quotas"]),
-        kappa=result["kappa"], raw_agreement=result["raw_agreement"],
+        kappa=agreement["in_scope"]["kappa"], raw_agreement=agreement["in_scope"]["raw_agreement"],
+        kappa_charge=agreement["section_as_charge"]["kappa"],
+        raw_agreement_charge=agreement["section_as_charge"]["raw_agreement"],
         primary_table=_table(primary), primary_weighted=json.dumps(primary["pooled_weighted"]),
         primary_unweighted=json.dumps({k: primary["pooled_unweighted"][k] for k in ("precision", "recall")}),
         section_table=sections,
+        secondary_table=_table(secondary), secondary_weighted=json.dumps(secondary["pooled_weighted"]),
+        secondary_unsure=secondary["unsure_excluded"],
         loose_table=_table(loose), loose_weighted=json.dumps(loose["pooled_weighted"]),
         split_accuracy=result["split"]["accuracy"], split_per_stratum=json.dumps(result["split"]["per_stratum"]),
         unsure=primary["unsure_excluded"],
