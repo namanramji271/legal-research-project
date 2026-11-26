@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -56,6 +57,8 @@ RETRIES = 4
 BACKOFF_SECONDS = 5.0
 TIMEOUT_SECONDS = 60.0
 FULL_PAGE_IMAGE_SHARE = 0.8
+DATA_LOSS = "Data-loss while decompressing corrupted data"
+EXCLUDED_STATUSES = ("failed", "missing", "extraction_failed")
 DEV_DOCS_PATH = BACKEND_DIR / "corpus" / "dev_docs.json"
 ERA_LABELS = [f"{a}-{b}" for a, b in ERAS]
 
@@ -144,7 +147,7 @@ def http_open(url: str) -> tuple[bytes, dict[str, str]]:
 
 def _is_complete(manifest: Manifest, record: dict[str, Any], dest: Path) -> bool:
     previous = manifest.state.get(record["doc_id"])
-    return bool(previous and previous.get("status") == "ok" and dest.is_file()
+    return bool(previous and previous.get("status") in ("ok", "extraction_failed") and dest.is_file()
                 and dest.stat().st_size == previous.get("bytes"))
 
 
@@ -282,22 +285,52 @@ def read_pages(path: Path) -> list[tuple[str, bool]]:
     return pages
 
 
+def expected_pages(doc_id: str) -> int | None:
+    """Page count implied by the SCR page range in the id ('1975_1_906_913' -> 8)."""
+    match = re.fullmatch(r"(?:S_)?\d{4}_\d+_(\d+)_(\d+)", doc_id)
+    if not match:
+        return None
+    first, last = int(match.group(1)), int(match.group(2))
+    return last - first + 1 if last >= first else None
+
+
+class _WarningCapture(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
 def extract_one(doc_id: str, source: str, target: str) -> dict[str, Any]:
-    """Top-level so it can run in a process pool."""
+    """Top-level so it can run in a process pool.
+
+    A pdfminer "Data-loss while decompressing corrupted data" warning means
+    part of the PDF could not be read: it is recorded as an extraction error.
+    """
     started = time.monotonic()
+    capture = _WarningCapture()
+    pdfminer_log = logging.getLogger("pdfminer")
+    pdfminer_log.addHandler(capture)
     try:
         pages = read_pages(Path(source))
         text = "\n".join(t for t, _ in pages)
         image_pages = sum(img for _, img in pages)
+        data_loss = [m for m in capture.messages if DATA_LOSS in m]
         result = {
-            "doc_id": doc_id, "error": None, "pages": len(pages), "chars": len(text),
+            "doc_id": doc_id, "error": f"data loss: {data_loss[0]}" if data_loss else None,
+            "pages": len(pages), "expected_pages": expected_pages(doc_id), "chars": len(text),
             "empty_pages": sum(len(t.strip()) < 50 for t, _ in pages), "image_pages": image_pages,
             "scanned": bool(pages) and image_pages >= 0.8 * len(pages),
+            "warnings": sorted(set(capture.messages))[:5],
             **split_headnote_body(text),
         }
     except Exception as error:  # a broken PDF must not stop the batch
         result = {"doc_id": doc_id, "error": f"{type(error).__name__}: {error}", "pages": 0, "chars": 0,
                   "split_method": None, "headnote": "", "proceedings": "", "body": ""}
+    finally:
+        pdfminer_log.removeHandler(capture)
     result["seconds"] = round(time.monotonic() - started, 2)
     result["extracted_at"] = now()
     partial = Path(target).with_suffix(".part")
@@ -364,8 +397,47 @@ def report(records: list[dict[str, Any]], work_dir: Path) -> dict[str, Any]:
     }
 
 
+def excluded_ids(work_dir: Path) -> set[str]:
+    """Documents whose last manifest status is failed, missing or extraction_failed."""
+    manifest = Manifest(work_dir / "pdf_manifest.jsonl")
+    return {d for d, r in manifest.state.items() if r.get("status") in EXCLUDED_STATUSES}
+
+
+def redo(records: list[dict[str, Any]], work_dir: Path, opener: Opener = http_open,
+         sleep: Callable[[float], None] = time.sleep, out: Callable[[str], None] = print) -> list[dict[str, Any]]:
+    """Re-download once (ignoring the skip check) and re-extract each record.
+
+    Reports whether ETag/size/SHA-256 changed. If extraction still fails, an
+    ``extraction_failed`` line is appended to the manifest: the document is
+    then excluded from the corpus and not re-fetched by normal runs.
+    """
+    manifest = Manifest(work_dir / "pdf_manifest.jsonl")
+    outcomes = []
+    for record in records:
+        doc_id = record["doc_id"]
+        before = dict(manifest.state.get(doc_id) or {})
+        manifest.state.pop(doc_id, None)  # force a fresh download
+        fetched = download_one(record, work_dir, manifest, opener, sleep)
+        same = {k: before.get(k) == fetched.get(k) for k in ("etag", "bytes", "sha256")}
+        extracted = (extract_one(doc_id, str(pdf_path(work_dir, doc_id)), str(text_path(work_dir, doc_id)))
+                     if fetched["status"] == "ok" else {"error": f"download {fetched['status']}"})
+        outcome = {"doc_id": doc_id, "download": fetched["status"], "unchanged": same,
+                   "error": extracted.get("error"), "pages": extracted.get("pages"),
+                   "expected_pages": extracted.get("expected_pages")}
+        if extracted.get("error") and fetched["status"] == "ok":
+            manifest.append({**fetched, "status": "extraction_failed", "error": extracted["error"],
+                             "fetched_at": now()})
+            outcome["recorded"] = "extraction_failed"
+        out(f"{doc_id}: download {fetched['status']}, unchanged {same}, "
+            f"extraction {'failed: ' + str(extracted.get('error')) if extracted.get('error') else 'ok'}")
+        outcomes.append(outcome)
+    return outcomes
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--redo", nargs="+", metavar="DOC_ID", default=None,
+                        help="re-download and re-extract these documents; record extraction_failed if still failing")
     parser.add_argument("--work-dir", type=Path, default=sc_source.DEFAULT_WORK_DIR)
     parser.add_argument("--ids-file", type=Path, default=None,
                         help="records to process (.jsonl or sample .json); default <work-dir>/candidates.jsonl")
@@ -384,6 +456,13 @@ def main(argv: list[str] | None = None) -> int:
     work_dir = args.work_dir.expanduser()
 
     records = load_records(args.ids_file or work_dir / "candidates.jsonl")
+    if args.redo:
+        by_id = {r["doc_id"]: r for r in records}
+        unknown = [d for d in args.redo if d not in by_id]
+        if unknown:
+            parser.error(f"not in {args.ids_file or 'candidates.jsonl'}: {unknown}")
+        redo([by_id[d] for d in args.redo], work_dir)
+        return 0
     if args.trial:
         pre = args.trial // 2 if args.trial_pre1980 is None else args.trial_pre1980
         records = select_trial(records, args.trial, pre, args.seed, exclude=load_dev_ids())

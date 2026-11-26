@@ -245,3 +245,59 @@ def test_uppercase_appellate_court_with_colon_is_not_a_jurisdiction_line() -> No
     result = pp.split_headnote_body(text)
     assert result["headnote"].startswith("Powers of the APPELLATE COURT:")
     assert result["proceedings"].startswith("CRIMINAL APPELLATE JURISDICTION")
+
+
+# --- data loss, redo, exclusions ---------------------------------------------
+
+def test_expected_pages_from_scr_range() -> None:
+    assert pp.expected_pages("1975_1_906_913") == 8
+    assert pp.expected_pages("S_1995_2_629_636") == 8
+    assert pp.expected_pages("2025_2_63_79") == 17
+    assert pp.expected_pages("odd-id") is None
+
+
+def _place_pdf(work_dir: Path, doc_id: str) -> None:
+    path = pp.pdf_path(work_dir, doc_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"%PDF")
+
+
+def test_data_loss_warning_is_an_extraction_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import logging
+
+    def damaged(path: Path):
+        logging.getLogger("pdfminer.pdftypes").warning("Data-loss while decompressing corrupted data")
+        return [("partial text", False)]
+
+    monkeypatch.setattr(pp, "read_pages", damaged)
+    _place_pdf(tmp_path, "2025_2_63_79")
+    result = pp.extract_one("2025_2_63_79", str(pp.pdf_path(tmp_path, "2025_2_63_79")),
+                            str(pp.text_path(tmp_path, "2025_2_63_79")))
+    assert result["error"].startswith("data loss: Data-loss while decompressing")
+    assert result["pages"] == 1 and result["expected_pages"] == 17
+    # The handler is removed again: later extractions are not affected.
+    assert not any(isinstance(h, pp._WarningCapture) for h in logging.getLogger("pdfminer").handlers)
+
+
+def test_redo_records_extraction_failed_and_excludes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rs = records(2)
+    pp.download_all(rs, tmp_path, workers=1, opener=FakeOpener(), sleep=lambda s: None, out=lambda _: None)
+
+    def read(path: Path):
+        if path.name.startswith("1975_1_1_"):
+            raise ValueError("broken xref")
+        return [(scr(), True)]
+
+    monkeypatch.setattr(pp, "read_pages", read)
+    opener = FakeOpener()
+    outcomes = pp.redo(rs, tmp_path, opener=opener, sleep=lambda s: None, out=lambda _: None)
+
+    assert len(opener.calls) == 2  # both re-downloaded despite being complete
+    good, bad = outcomes
+    assert good["error"] is None and good["unchanged"] == {"etag": True, "bytes": True, "sha256": True}
+    assert bad["recorded"] == "extraction_failed" and bad["error"] == "ValueError: broken xref"
+    assert pp.excluded_ids(tmp_path) == {rs[1]["doc_id"]}
+    # A normal run does not re-fetch the excluded document.
+    again = FakeOpener()
+    pp.download_all(rs, tmp_path, workers=1, opener=again, sleep=lambda s: None, out=lambda _: None)
+    assert again.calls == []
