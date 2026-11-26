@@ -127,3 +127,17 @@ python eval/evaluate_qa.py
 defaults to `bm25` and also accepts `dense` or `hybrid`. `BM25_MIN_SCORE` sets
 the minimum BM25 score when BM25 is active and defaults to `0`. See
 [`CLAUDE.md`](CLAUDE.md) for the retrieval configuration and behavior details.
+
+## Data sources and attribution
+
+- **Corpus v1 (frozen baseline):** 48 Supreme Court judgments filtered from the
+  ILDC portion of [IL-TUR](https://huggingface.co/datasets/Exploration-Lab/IL-TUR)
+  (Exploration-Lab). Gated, CC BY-NC-SA 4.0, research use only and
+  not to be redistributed, so the text is never committed.
+- **Corpus v2 (in progress):** Supreme Court of India judgments and metadata
+  from the [Indian Supreme Court Judgments](https://registry.opendata.aws/indian-supreme-court-judgments/)
+  open dataset (`s3://indian-supreme-court-judgments`, region `ap-south-1`),
+  collected from the eCourts website and maintained by
+  [Dattam Labs](https://dattam.in), licensed
+  [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). The judgment text
+  is not committed here; only an ID-and-metadata manifest (no text) will be.
