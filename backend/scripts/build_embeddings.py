@@ -1,7 +1,11 @@
 """Chunk the local judgment corpus and persist MiniLM embeddings in ChromaDB.
 
 Usage:
-    python backend/scripts/build_embeddings.py
+    python backend/scripts/build_embeddings.py                # CORPUS_VERSION (default v1)
+    python backend/scripts/build_embeddings.py --corpus v2
+
+--corpus picks the input file, Chroma path and collection from
+config.corpus_paths(); --input/--chroma-path override the paths.
 """
 
 from __future__ import annotations
@@ -24,7 +28,8 @@ BACKEND_DIR = SCRIPT_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from embeddings import CHROMA_DB_PATH, COLLECTION_NAME, MODEL_NAME, get_embedding_function
+import config  # noqa: E402
+from embeddings import CHROMA_DB_PATH, COLLECTION_NAME, MODEL_NAME, get_embedding_function  # noqa: E402
 
 DATA_DIR = BACKEND_DIR / "data"
 DEFAULT_INPUT_PATH = DATA_DIR / "judgments.jsonl"
@@ -158,6 +163,7 @@ def rebuild_collection(
     metadatas: list[dict[str, str | int]],
     chroma_path: Path,
     batch_size: int,
+    collection_name: str = COLLECTION_NAME,
 ) -> int:
     try:
         import chromadb
@@ -169,12 +175,12 @@ def rebuild_collection(
 
     client = chromadb.PersistentClient(path=str(chroma_path))
     try:
-        client.delete_collection(COLLECTION_NAME)
+        client.delete_collection(collection_name)
     except Exception:
         # The first build has no collection to remove.
         pass
     collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
+        name=collection_name,
         metadata={"hnsw:space": "cosine", "embedding_model": MODEL_NAME},
         embedding_function=get_embedding_function(),
     )
@@ -189,26 +195,40 @@ def rebuild_collection(
     return collection.count()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
-    parser.add_argument("--chroma-path", type=Path, default=DEFAULT_CHROMA_PATH)
+    parser.add_argument("--corpus", choices=config.VALID_CORPUS_VERSIONS, default=None,
+                        help="corpus version (default: CORPUS_VERSION, i.e. v1 unless set)")
+    parser.add_argument("--input", type=Path, default=None, help="override the corpus judgments file")
+    parser.add_argument("--chroma-path", type=Path, default=None, help="override the Chroma directory")
     parser.add_argument("--batch-size", type=int, default=EMBEDDING_BATCH_SIZE)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.batch_size <= 0:
         parser.error("--batch-size must be positive")
     return args
 
 
+def resolve_targets(args: argparse.Namespace) -> tuple[Path, Path, str]:
+    """(input file, Chroma path, collection) for the chosen corpus version."""
+    # Headnote variants arrive with the v2 chunker; until then builds use the body only.
+    paths = config.corpus_paths(args.corpus, "exclude")
+    return (
+        args.input or paths.judgments,
+        args.chroma_path or paths.minilm_db,
+        paths.minilm_collection,
+    )
+
+
 def main() -> None:
     args = parse_args()
-    if not args.input.exists():
-        raise SystemExit(f"Judgment corpus not found: {args.input}")
-    ids, documents, metadatas = build_chunk_records(args.input)
+    input_path, chroma_path, collection_name = resolve_targets(args)
+    if not input_path.exists():
+        raise SystemExit(f"Judgment corpus not found: {input_path}")
+    ids, documents, metadatas = build_chunk_records(input_path)
     count = rebuild_collection(
-        ids, documents, metadatas, args.chroma_path, args.batch_size
+        ids, documents, metadatas, chroma_path, args.batch_size, collection_name
     )
-    print(f"Created {count} chunks in {args.chroma_path / COLLECTION_NAME}")
+    print(f"Created {count} chunks in {chroma_path / collection_name}")
 
 
 if __name__ == "__main__":

@@ -12,14 +12,7 @@ from auth import require_role
 
 import config
 from bm25_search import bm25_search, bm25_search_chunks
-from embeddings import (
-    BGE_CHROMA_DB_PATH,
-    BGE_COLLECTION_NAME,
-    CHROMA_DB_PATH,
-    COLLECTION_NAME,
-    get_bge_embedding_function,
-    get_embedding_function,
-)
+from embeddings import get_bge_embedding_function, get_embedding_function
 from eval.metrics import collapse_cases, weighted_rrf
 from explainability import STOPWORDS, compute_match_explanation
 
@@ -33,19 +26,21 @@ router = APIRouter()
 
 
 def get_judgment_collection():
-    """Open the persisted collection with the same MiniLM function used at build time."""
-    client = chromadb.PersistentClient(path=str(CHROMA_DB_PATH))
+    """Open the active corpus's MiniLM collection with its build-time function."""
+    paths = config.corpus_paths()
+    client = chromadb.PersistentClient(path=str(paths.minilm_db))
     return client.get_collection(
-        name=COLLECTION_NAME,
+        name=paths.minilm_collection,
         embedding_function=get_embedding_function(),
     )
 
 
 def get_bge_judgment_collection():
-    """Open the persisted BGE-M3 collection with its build-time function."""
-    client = chromadb.PersistentClient(path=str(BGE_CHROMA_DB_PATH))
+    """Open the active corpus's BGE-M3 collection with its build-time function."""
+    paths = config.corpus_paths()
+    client = chromadb.PersistentClient(path=str(paths.bge_db))
     return client.get_collection(
-        name=BGE_COLLECTION_NAME,
+        name=paths.bge_collection,
         embedding_function=get_bge_embedding_function(),
     )
 
