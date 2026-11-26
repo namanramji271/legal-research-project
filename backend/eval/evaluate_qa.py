@@ -7,7 +7,6 @@ Run from the repository root with:
 from __future__ import annotations
 
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -16,32 +15,15 @@ from typing import Any
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 QUESTIONS_PATH = Path(__file__).with_name("test_qa_questions.json")
-INSUFFICIENT_CONTEXT_PATTERNS = (
-    r"no relevant judgments were found",
-    r"not enough information",
-    r"insufficient information",
-    r"does not contain (?:enough )?information",
-    r"do not contain (?:enough )?information",
-    r"cannot answer.*(?:context|information|sources)",
-    r"unable to answer.*(?:context|information|sources)",
-)
 
 # qa.py uses imports relative to the backend directory.
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from eval.refusal_patterns import (  # noqa: E402
+    is_insufficient_context as _is_insufficient_context,
+)
 from qa import ask_question  # noqa: E402
-
-
-def _is_insufficient_context(answer: Any) -> bool:
-    """Identify an empty or explicit insufficient-context response."""
-    answer_text = str(answer or "").strip()
-    if not answer_text:
-        return True
-    return any(
-        re.search(pattern, answer_text, flags=re.IGNORECASE | re.DOTALL)
-        for pattern in INSUFFICIENT_CONTEXT_PATTERNS
-    )
 
 
 def _response_summary(response: dict[str, Any]) -> str:

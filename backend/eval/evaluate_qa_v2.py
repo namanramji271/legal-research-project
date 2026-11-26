@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -28,20 +27,14 @@ CACHE_DIR = EVAL_DIR / "cache"
 FINDINGS_PATH = EVAL_DIR / "qa_v2_findings.md"
 QA_N_RESULTS = 5
 CONTEXT_MODES = ("snippet", "full")
-INSUFFICIENT_CONTEXT_PATTERNS = (
-    r"no relevant judgments were found",
-    r"not enough information",
-    r"insufficient information",
-    r"does not contain (?:enough )?information",
-    r"do not contain (?:enough )?information",
-    r"cannot answer.*(?:context|information|sources)",
-    r"unable to answer.*(?:context|information|sources)",
-)
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import qa  # noqa: E402
+from eval.refusal_patterns import (  # noqa: E402
+    is_insufficient_context as _is_insufficient_context,
+)
 from search import search_judgments  # noqa: E402
 
 
@@ -64,16 +57,6 @@ def _cache_key(prompt: str) -> str:
 
 def _cache_path(cache_key: str) -> Path:
     return CACHE_DIR / f"{cache_key}.json"
-
-
-def _is_insufficient_context(answer: Any) -> bool:
-    answer_text = str(answer or "").strip()
-    if not answer_text:
-        return True
-    return any(
-        re.search(pattern, answer_text, flags=re.IGNORECASE | re.DOTALL)
-        for pattern in INSUFFICIENT_CONTEXT_PATTERNS
-    )
 
 
 def _is_quota_error(error: BaseException) -> bool:
