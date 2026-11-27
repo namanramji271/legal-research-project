@@ -545,7 +545,9 @@ def read_log(path: Path) -> list[dict[str, str]]:
         missing = [c for c in LOG_COLUMNS if c not in (reader.fieldnames or [])]
         if missing:
             raise ValueError(f"{path.name}: missing columns {missing}")
-        return [{c: (row[c] or "").strip().lower() if c != "note" else (row[c] or "").strip() for c in LOG_COLUMNS}
+        # doc_id keeps its case (real ids are mixed-case, e.g. S_2004_3_785_791); label values are case-folded.
+        return [{c: (row[c] or "").strip() if c in ("doc_id", "note") else (row[c] or "").strip().lower()
+                 for c in LOG_COLUMNS}
                 for row in reader]
 
 

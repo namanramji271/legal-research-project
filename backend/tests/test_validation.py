@@ -406,7 +406,8 @@ def test_read_log_requires_columns(tmp_path: Path) -> None:
         v.read_log(tmp_path / "log.csv")
     (tmp_path / "ok.csv").write_text(",".join(v.LOG_COLUMNS) + "\nE1,In_Scope,No,Yes,No,Kept as is\n",
                                      encoding="utf-8")
-    assert v.read_log(tmp_path / "ok.csv") == [log_row("e1", "in_scope", "no", "yes", "no", "Kept as is")]
+    # doc_id keeps its case (real ids are mixed-case); label values are lowercased.
+    assert v.read_log(tmp_path / "ok.csv") == [log_row("E1", "in_scope", "no", "yes", "no", "Kept as is")]
 
 
 # --- disagreements subcommand ---------------------------------------------------
@@ -690,3 +691,82 @@ def test_readers_ignore_a_bom(tmp_path: Path) -> None:
     log_text = ",".join(v.LOG_COLUMNS) + "\nh2,in_scope,unsure,no,no,n\n"
     (tmp_path / "log.csv").write_bytes(b"\xef\xbb\xbf" + log_text.encode("utf-8"))
     assert v.read_log(tmp_path / "log.csv")[0]["doc_id"] == "h2"
+
+
+# --- mixed-case doc_ids (real ids look like S_2004_3_785_791) ---------------------
+
+MIXED_IDS = ("S_2004_3_785_791", "S_1999_1_10_20", "lower_id")
+
+
+def mixed_case_sheets(tmp_path: Path) -> tuple[Path, Path]:
+    """Disagreements: S_2004... in_scope (yes vs no), S_1999... section_as_charge (yes vs no); lower_id agrees."""
+    human = [
+        {"doc_id": "S_2004_3_785_791", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes"},
+        {"doc_id": "S_1999_1_10_20", "in_scope": "no", "section_as_charge": "yes", "split_correct": "yes"},
+        {"doc_id": "lower_id", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes"},
+    ]
+    llm = [
+        {"doc_id": "lower_id", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes", "reason": "a"},
+        {"doc_id": "S_1999_1_10_20", "in_scope": "no", "section_as_charge": "no", "split_correct": "yes",
+         "reason": "b"},
+        {"doc_id": "S_2004_3_785_791", "in_scope": "no", "section_as_charge": "no", "split_correct": "yes",
+         "reason": "c"},
+    ]
+    write_sheet_rows(tmp_path / "human.csv", human, v.SHEET_COLUMNS)
+    write_sheet_rows(tmp_path / "llm.csv", llm, v.SHEET_COLUMNS + ("reason",))
+    return tmp_path / "llm.csv", tmp_path / "human.csv"
+
+
+MIXED_FINALS = [("no", "LLM right"), ("yes", "kept")]
+
+
+def test_read_log_and_check_adjudication_keep_doc_id_case(tmp_path: Path) -> None:
+    text = ",".join(v.LOG_COLUMNS) + "\nS_2004_3_785_791,IN_SCOPE,Yes,NO,No,Note Kept\n"
+    (tmp_path / "log.csv").write_text(text, encoding="utf-8")
+    log = v.read_log(tmp_path / "log.csv")
+    assert log == [log_row("S_2004_3_785_791", "in_scope", "yes", "no", "no", "Note Kept")]
+    subset = list(MIXED_IDS)
+    human = {d: lab("yes") for d in subset}
+    llm = {**human, "S_2004_3_785_791": lab("no")}
+    adjudicated = {**human, "S_2004_3_785_791": lab("no")}
+    result = v.check_adjudication(subset, llm, human, adjudicated, log)
+    assert result["disagreements"]["in_scope"] == 1 and result["changed_from_blind_human"]["in_scope"] == 1
+
+
+def test_apply_adjudication_with_mixed_case_doc_ids(tmp_path: Path) -> None:
+    p = adjudication_paths(tmp_path, *mixed_case_sheets(tmp_path))
+    _, log = read_csv(p["log"])
+    assert [r["doc_id"] for r in log] == ["S_2004_3_785_791", "S_1999_1_10_20"]
+    write_review_final(p, MIXED_FINALS)
+    printed: list[str] = []
+    assert apply(p, printed) == {"applied": 2, "changed": 1, "check_passed": True}
+    assert printed == ["Applied 2 rows; 1 labels changed; check_adjudication: passed"]
+    assert v.read_labels(p["adjudicated"])["S_2004_3_785_791"]["in_scope"] == "no"
+
+
+def test_score_path_with_mixed_case_doc_ids(tmp_path: Path) -> None:
+    """disagreements -> apply-adjudication -> score, all through the CLI on mixed-case ids."""
+    llm_path, human_path = mixed_case_sheets(tmp_path)
+    adj = tmp_path / "adj"
+    assert v.main(["disagreements", "--llm", str(llm_path), "--human", str(human_path), "--out-dir", str(adj)]) == 0
+    p = {"dir": adj, "review": adj / "adjudication_review_final.csv"}
+    write_review_final(p, MIXED_FINALS)
+    assert v.main(["apply-adjudication", "--review-final", str(p["review"]), "--log", str(adj / v.LOG_FILE),
+                   "--adjudicated", str(adj / v.ADJUDICATED_FILE), "--human", str(human_path),
+                   "--llm", str(llm_path)]) == 0
+    sample = [{"doc_id": "S_2004_3_785_791", "stratum": "explicit", "primary_sections": ["302"],
+               "loose_sections": ["302"]},
+              {"doc_id": "S_1999_1_10_20", "stratum": "rejected_flagged", "primary_sections": [],
+               "loose_sections": []},
+              {"doc_id": "lower_id", "stratum": "explicit", "primary_sections": ["302"], "loose_sections": ["302"]}]
+    key = {"seed": 1, "population": {"explicit": 20, "rejected_flagged": 10}, "quotas": v.QUOTAS,
+           "sample": sample, "human_subset": list(MIXED_IDS), "human_subset_seed": 3}
+    work = tmp_path / "work"
+    (work / "validation").mkdir(parents=True)
+    (work / "validation" / "validation_key.json").write_text(json.dumps(key), encoding="utf-8")
+    assert v.main(["--work-dir", str(work), "score", "--llm", str(llm_path), "--human", str(human_path),
+                   "--adjudicated", str(adj / v.ADJUDICATED_FILE), "--log", str(adj / v.LOG_FILE)]) == 0
+    result = json.loads((work / "validation" / "validation_result.json").read_text(encoding="utf-8"))
+    assert result["adjudication"]["disagreements"] == {"in_scope": 1, "section_as_charge": 1, "split_correct": 0}
+    assert result["adjudication"]["changed_from_blind_human"]["in_scope"] == 1
+    assert result["adjudication"]["logged_rows"] == 2
