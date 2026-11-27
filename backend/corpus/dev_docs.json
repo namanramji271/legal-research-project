@@ -312,6 +312,22 @@
   {
    "doc_id": "2012_7_541_559",
    "reason": "non-candidate screening: detector evidence snippets shown (2026-11-27)"
+  },
+  {
+   "doc_id": "2024_12_335_357",
+   "reason": "split rule: headnote/body boundary inspected after weak_split validation failure (2026-11-27)"
+  },
+  {
+   "doc_id": "2024_10_1448_1461",
+   "reason": "split rule: headnote/body boundary inspected after weak_split validation failure (2026-11-27)"
+  },
+  {
+   "doc_id": "2025_5_1116_1127",
+   "reason": "split rule: headnote/body boundary inspected after weak_split validation failure (2026-11-27)"
+  },
+  {
+   "doc_id": "2024_10_1313_1343",
+   "reason": "split rule: headnote/body boundary inspected after weak_split validation failure (2026-11-27)"
   }
  ]
 }
