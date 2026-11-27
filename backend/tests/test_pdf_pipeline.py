@@ -301,3 +301,82 @@ def test_redo_records_extraction_failed_and_excludes(tmp_path: Path, monkeypatch
     again = FakeOpener()
     pp.download_all(rs, tmp_path, workers=1, opener=again, sleep=lambda s: None, out=lambda _: None)
     assert again.calls == []
+
+
+# --- Digital SCR layout (2024-) ----------------------------------------------------
+
+DIGITAL_HEADNOTE = ("Issue for Consideration\nWhether the conviction under s.302 IPC is sustainable.\n"
+                    "List of Keywords\nLast seen theory; Murder; Motive.\nCase Arising From\n")
+DIGITAL_JUDGE = "Prashant Kumar Mishra, J.\nLeave granted.\n2. This appeal by special leave is directed against. " * 20
+
+
+def digital(marker: str = "Judgment / Order of the Supreme Court\nJudgment\n", prefix: str = "") -> str:
+    return (
+        f"{prefix}{DIGITAL_HEADNOTE}CRIMINAL APPELLATE JURISDICTION: Criminal Appeal No.\n2748 of 2025\n"
+        "From the Judgment and Order dated 15.04.2024 of the High Court\nof Orissa at Cuttack in CRLA No. 358 of 2019\n"
+        "Appearances for Parties\nAdvs. for the Appellant:\nShyam Manohar.\n1118 [2025] 5 S.C.R.\n"
+        f"Supreme Court Reports\n{marker}{DIGITAL_JUDGE}"
+    )
+
+
+def test_split_digital_scr_heading() -> None:
+    result = pp.split_headnote_body(digital())
+    assert result["split_method"] == "jurisdiction+digital_heading" and not result["split_suspect"]
+    assert result["body"].startswith("Prashant Kumar Mishra, J.\nLeave granted.")
+    assert result["headnote"] == DIGITAL_HEADNOTE.strip()
+    assert result["proceedings"].startswith("CRIMINAL APPELLATE JURISDICTION: Criminal Appeal No.")
+    assert "Appearances for Parties" in result["proceedings"] and "Shyam Manohar." in result["proceedings"]
+    assert result["proceedings"].endswith("Judgment / Order of the Supreme Court\nJudgment")
+    assert "Appearances" not in result["body"] and "JURISDICTION" not in result["body"]
+
+
+@pytest.mark.parametrize("marker, body_start", [
+    ("Judgment / Order of the Supreme Court\nOrder\n", "Prashant"),        # an order, not a judgment
+    ("Judgment / Order of the Supreme Court\n", "Prashant"),               # marker line only
+    ("  Judgment/Order  of the\tSupreme Court \nJudgment\n", "Prashant"),  # spacing variants
+])
+def test_split_digital_scr_heading_variants(marker: str, body_start: str) -> None:
+    result = pp.split_headnote_body(digital(marker))
+    assert result["split_method"] == "jurisdiction+digital_heading"
+    assert result["body"].startswith(body_start)
+
+
+def test_split_digital_heading_does_not_override_older_markers() -> None:
+    delivered = digital("Judgment / Order of the Supreme Court\nThe Judgment of the Court was delivered by\n")
+    assert pp.split_headnote_body(delivered)["split_method"] == "jurisdiction+delivered"
+    uppercase = digital("J U D G M E N T\nJudgment / Order of the Supreme Court\nJudgment\n")
+    result = pp.split_headnote_body(uppercase)
+    assert result["split_method"] == "jurisdiction+heading"
+    assert result["body"].startswith("Judgment / Order of the Supreme Court")  # unchanged older behaviour
+
+
+@pytest.mark.parametrize("text", [
+    digital(marker="", prefix="Judgment / Order of the Supreme Court\nJudgment\n"),  # only in the headnote
+    digital(marker="judgment / order of the supreme court\njudgment\n"),            # case-sensitive
+    digital(marker="Judgment\n"),                                                   # title-case heading alone
+    digital(marker="As per the Judgment / Order of the Supreme Court in X\n"),     # not a standalone line
+])
+def test_split_digital_heading_needs_the_exact_marker_after_jurisdiction(text: str) -> None:
+    result = pp.split_headnote_body(text)
+    assert result["split_method"] == "jurisdiction"
+    assert result["body"].startswith("CRIMINAL APPELLATE JURISDICTION")
+
+
+def test_split_digital_heading_outside_the_proceedings_window_or_without_jurisdiction() -> None:
+    far = digital(marker="x " * (pp.PROCEEDINGS_WINDOW // 2) + "\nJudgment / Order of the Supreme Court\nJudgment\n")
+    assert pp.split_headnote_body(far)["split_method"] == "jurisdiction"
+    no_jurisdiction = DIGITAL_HEADNOTE + "Judgment / Order of the Supreme Court\nJudgment\n" + DIGITAL_JUDGE
+    assert pp.split_headnote_body(no_jurisdiction)["split_method"] == "none"
+
+
+def test_extract_records_the_digital_split_method(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    doc_id = "2025_5_1116_1127"
+    path = pp.pdf_path(tmp_path, doc_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"%PDF")
+    text = digital()
+    monkeypatch.setattr(pp, "read_pages", lambda _: [(text[:300], False), (text[300:], False)])
+    pp.extract_all([doc_id], tmp_path, workers=1, out=lambda _: None)
+    saved = json.loads(pp.text_path(tmp_path, doc_id).read_text(encoding="utf-8"))
+    assert saved["split_method"] == "jurisdiction+digital_heading"
+    assert saved["body"].startswith("Prashant Kumar Mishra, J.")

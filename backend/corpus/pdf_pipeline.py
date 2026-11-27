@@ -20,7 +20,9 @@ headnote, then the procedural block starting "CRIMINAL/CIVIL APPELLATE (or
 ORIGINAL) JURISDICTION: ..." (appeal number, counsel), then "The Judgment of
 the Court was delivered by ...", then the judgment. split_method records
 which markers were found: jurisdiction+delivered, jurisdiction+heading,
-jurisdiction, delivered, or none (then body = full text, headnote empty).
+jurisdiction+digital_heading (Digital SCR, 2024-: "Judgment / Order of the
+Supreme Court" / "Judgment"), jurisdiction, delivered, or none (then body =
+full text, headnote empty).
 """
 
 from __future__ import annotations
@@ -243,6 +245,12 @@ DELIVERED = re.compile(
 )
 # A standalone heading line: JUDGMENT / J U D G M E N T / ORDER / O R D E R.
 HEADING = re.compile(r"(?m)^[ \t]*(?:J\s?U\s?D\s?G\s?E?\s?M\s?E\s?N\s?T|O\s?R\s?D\s?E\s?R)[ \t]*:?[ \t]*$")
+# Digital SCR layout (2024-): a title-case "Judgment / Order of the Supreme Court" line,
+# usually followed by a "Judgment" or "Order" line, then the authoring judge. Case-sensitive;
+# only tried after the jurisdiction line when neither DELIVERED nor HEADING matched.
+DIGITAL_HEADING = re.compile(
+    r"(?m)^[ \t]*Judgment\s*/\s*Order\s+of\s+the\s+Supreme\s+Court[ \t]*$(?:\n[ \t]*(?:Judgment|Order)[ \t]*$)?"
+)
 PROCEEDINGS_WINDOW = 8000  # max distance from the jurisdiction line to the body marker
 
 
@@ -252,11 +260,15 @@ def split_headnote_body(text: str) -> dict[str, Any]:
     window_end = start + PROCEEDINGS_WINDOW if j else int(len(text) * 0.6)
     d = DELIVERED.search(text, start, window_end)
     h = HEADING.search(text, start, window_end) if j and not d else None
+    g = DIGITAL_HEADING.search(text, start, window_end) if j and not d and not h else None
 
     if j and d:
         method, head, proceedings, body = "jurisdiction+delivered", text[:j.start()], text[j.start():d.end()], text[d.end():]
     elif j and h:
         method, head, proceedings, body = "jurisdiction+heading", text[:j.start()], text[j.start():h.end()], text[h.end():]
+    elif j and g:
+        method, head, proceedings, body = ("jurisdiction+digital_heading", text[:j.start()], text[j.start():g.end()],
+                                           text[g.end():])
     elif j:
         method, head, proceedings, body = "jurisdiction", text[:j.start()], "", text[j.start():]
     elif d:
