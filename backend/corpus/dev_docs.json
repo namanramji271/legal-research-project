@@ -328,6 +328,22 @@
   {
    "doc_id": "2024_10_1313_1343",
    "reason": "split rule: headnote/body boundary inspected after weak_split validation failure (2026-11-27)"
+  },
+  {
+   "doc_id": "2024_11_1440_1447",
+   "reason": "split rule: Digital SCR boundary inspected (split_correct=no in the 55; fixed by jurisdiction+digital_heading) (2026-11-27)"
+  },
+  {
+   "doc_id": "2025_3_1407_1430",
+   "reason": "split rule: Digital SCR boundary inspected (split_correct=no in the 55; fixed by jurisdiction+digital_heading) (2026-11-27)"
+  },
+  {
+   "doc_id": "1991_1_88_97",
+   "reason": "split rule: 'Order of the Court was delivered' boundary inspected (split_correct=no in the 55) (2026-11-27)"
+  },
+  {
+   "doc_id": "S_2004_4_464_469",
+   "reason": "split rule: 'Order of the Court was delivered' boundary inspected (split_correct=no in the 55) (2026-11-27)"
   }
  ]
 }
