@@ -449,7 +449,7 @@ def disagreement_sheets(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def read_csv(path: Path) -> tuple[list[str], list[dict]]:
-    with path.open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         return list(reader.fieldnames or []), list(reader)
 
@@ -536,3 +536,157 @@ def test_disagreements_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     printed = capsys.readouterr().out
     assert "Disagreements: 3 (in_scope 1, section_as_charge 1, split_correct 1)" in printed
     assert (tmp_path / "adj" / v.LOG_FILE).is_file()
+
+
+# --- apply-adjudication ----------------------------------------------------------
+
+def adjudication_paths(tmp_path: Path, llm_path: Path, human_path: Path) -> dict[str, Path]:
+    adj = tmp_path / "adj"
+    v.write_disagreements(llm_path, human_path, adj, lambda _: None)
+    return {"llm": llm_path, "human": human_path, "dir": adj, "review": adj / "adjudication_review_final.csv",
+            "log": adj / v.LOG_FILE, "adjudicated": adj / v.ADJUDICATED_FILE}
+
+
+def adjudication_setup(tmp_path: Path) -> dict[str, Path]:
+    """Synthetic sheets -> disagreements; rows: h2 in_scope, h3 section_as_charge, h4 split_correct."""
+    return adjudication_paths(tmp_path, *disagreement_sheets(tmp_path))
+
+
+def rewrite_csv(path: Path, header: list[str], rows: list[dict], encoding: str = "utf-8") -> None:
+    with path.open("w", newline="", encoding=encoding) as f:
+        w = csv.DictWriter(f, fieldnames=header)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_review_final(p: dict[str, Path], finals: list[tuple[str, str]], drop: int = 0) -> None:
+    """Review + final/note, item blanked, saved as Excel would (utf-8 with BOM)."""
+    header, rows = read_csv(p["dir"] / v.REVIEW_FILE)
+    rows = rows[: len(rows) - drop]
+    rewrite_csv(p["review"], header + ["final", "note"],
+                [{**row, "item": "", "final": final, "note": note} for row, (final, note) in zip(rows, finals)],
+                encoding="utf-8-sig")
+
+
+def apply(p: dict[str, Path], printed: list[str] | None = None) -> dict:
+    sink = printed if printed is not None else []
+    return v.apply_adjudication(p["review"], p["log"], p["adjudicated"], p["human"], p["llm"], sink.append)
+
+
+def snapshot(p: dict[str, Path]) -> dict[str, bytes]:
+    return {k: p[k].read_bytes() for k in ("log", "adjudicated")}
+
+
+def bak(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
+
+
+GOOD_FINALS = [("No", "LLM right: acquittal only"), ("yes", "kept"), ("yes", "split is fine")]
+
+
+def test_apply_adjudication_fills_log_and_changes_only_target_cells(tmp_path: Path) -> None:
+    p = adjudication_setup(tmp_path)
+    p["adjudicated"].write_bytes(b"\xef\xbb\xbf" + p["adjudicated"].read_bytes())  # BOM must survive
+    before = snapshot(p)
+    write_review_final(p, GOOD_FINALS)
+    printed: list[str] = []
+    assert apply(p, printed) == {"applied": 3, "changed": 2, "check_passed": True}
+    assert printed == ["Applied 3 rows; 2 labels changed; check_adjudication: passed"]
+
+    assert {k: bak(p[k]).read_bytes() for k in ("log", "adjudicated")} == before
+    after = p["adjudicated"].read_bytes()
+    assert after.startswith(b"\xef\xbb\xbf") and b"\r\n" in after
+    _, old_rows = read_csv(p["human"])
+    _, new_rows = read_csv(p["adjudicated"])
+    diffs = {(o["doc_id"], k): (o[k], n[k]) for o, n in zip(old_rows, new_rows) for k in o if o[k] != n[k]}
+    assert diffs == {("h2", "in_scope"): ("unsure", "no"), ("h4", "split_correct"): ("no", "yes")}
+
+    _, log = read_csv(p["log"])
+    assert [(r["final"], r["note"]) for r in log] == [("no", "LLM right: acquittal only"), ("yes", "kept"),
+                                                      ("yes", "split is fine")]
+    v.check_adjudication(["h1", "h2", "h3", "h4"], v.read_labels(p["llm"]), v.read_labels(p["human"]),
+                         v.read_labels(p["adjudicated"]), v.read_log(p["log"]))
+
+
+ABORT_CASES = [
+    ("count", "has 2 rows but"),
+    ("pair", r"row 2: log field/human_blind/llm do not match the review row"),
+    ("human_blind", r"row 1: log human_blind does not match the blind human sheet"),
+    ("empty_final", r"\[2\]"),
+    ("bad_final", r"\[3\]"),
+    ("empty_note", r"\[1\]"),
+    ("bak", "refusing to overwrite existing backups"),
+    ("edited", r"already differs from the blind human sheet for: \['h1'\]"),
+    ("unknown_doc", r"doc_ids not present exactly once: \['h3'\]"),
+]
+
+
+@pytest.mark.parametrize("case, match", ABORT_CASES)
+def test_apply_adjudication_aborts_without_changes(tmp_path: Path, case: str, match: str) -> None:
+    p = adjudication_setup(tmp_path)
+    finals = list(GOOD_FINALS)
+    if case == "empty_final":
+        finals[1] = ("", "note")
+    if case == "bad_final":
+        finals[2] = ("unsure", "split_correct has no unsure")
+    if case == "empty_note":
+        finals[0] = ("no", " ")
+    write_review_final(p, finals, drop=1 if case == "count" else 0)
+    if case in ("pair", "human_blind"):
+        header, rows = read_csv(p["review"])
+        if case == "pair":
+            rows[1]["llm_section_as_charge"] = "yes"
+        else:  # log and review agree with each other, but not with the blind human sheet
+            rows[0]["human_in_scope"] = "yes"
+            log_header, log_rows = read_csv(p["log"])
+            log_rows[0]["human_blind"] = "yes"
+            rewrite_csv(p["log"], log_header, log_rows)
+        rewrite_csv(p["review"], header, rows, encoding="utf-8-sig")
+    if case == "bak":
+        bak(p["adjudicated"]).write_text("old", encoding="utf-8")
+    if case in ("edited", "unknown_doc"):
+        header, rows = read_csv(p["adjudicated"])
+        if case == "edited":
+            rows[0]["in_scope"] = "no"  # h1: hand-edited before applying
+        else:
+            rows = [r for r in rows if r["doc_id"] != "h3"]
+        rewrite_csv(p["adjudicated"], header, rows)
+    before = snapshot(p)
+    with pytest.raises(ValueError, match=match):
+        apply(p)
+    assert snapshot(p) == before
+    assert not bak(p["log"]).exists()
+
+
+def test_apply_adjudication_rejects_inconsistent_result(tmp_path: Path) -> None:
+    human = [{"doc_id": "h5", "in_scope": "no", "section_as_charge": "yes", "split_correct": "yes", "notes": ""}]
+    llm = [{"doc_id": "h5", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes", "reason": "R"}]
+    write_sheet_rows(tmp_path / "human.csv", human, v.SHEET_COLUMNS)
+    write_sheet_rows(tmp_path / "llm.csv", llm, v.SHEET_COLUMNS + ("reason",))
+    p = adjudication_paths(tmp_path, tmp_path / "llm.csv", tmp_path / "human.csv")
+    write_review_final(p, [("yes", "court decides 302"), ("yes", "also charge")])  # yes + yes: not allowed
+    before = snapshot(p)
+    with pytest.raises(ValueError, match=r"break the label rules for: \['h5'\]"):
+        apply(p)
+    assert snapshot(p) == before
+    assert not bak(p["log"]).exists()
+
+
+def test_apply_adjudication_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    p = adjudication_setup(tmp_path)
+    write_review_final(p, GOOD_FINALS)
+    assert v.main(["apply-adjudication", "--review-final", str(p["review"]), "--log", str(p["log"]),
+                   "--adjudicated", str(p["adjudicated"]), "--human", str(p["human"]), "--llm", str(p["llm"])]) == 0
+    assert capsys.readouterr().out.strip() == "Applied 3 rows; 2 labels changed; check_adjudication: passed"
+
+
+def test_readers_ignore_a_bom(tmp_path: Path) -> None:
+    _, human_path = disagreement_sheets(tmp_path)
+    bom_path = tmp_path / "human_bom.csv"
+    bom_path.write_bytes(b"\xef\xbb\xbf" + human_path.read_bytes())
+    assert v.read_labels(bom_path) == v.read_labels(human_path)
+    rows = v._raw_rows(bom_path)
+    assert list(rows["h2"])[0] == "item" and rows["h2"]["item"] == "2"
+    log_text = ",".join(v.LOG_COLUMNS) + "\nh2,in_scope,unsure,no,no,n\n"
+    (tmp_path / "log.csv").write_bytes(b"\xef\xbb\xbf" + log_text.encode("utf-8"))
+    assert v.read_log(tmp_path / "log.csv")[0]["doc_id"] == "h2"

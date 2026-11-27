@@ -101,7 +101,10 @@ Usage (run only after the full extraction has finished):
     python backend/corpus/validation.py disagreements --llm <validation_sheet_LLM.csv>
         --human <validation_sheet_human_25.csv> --out-dir <dir outside the repo>
         (writes adjudication_review.csv, adjudicated_25.csv, adjudication_log.csv; then the human fills in
-        final + note in the log and edits adjudicated_25.csv)
+        final + note in a copy of the review, adjudication_review_final.csv)
+    python backend/corpus/validation.py apply-adjudication --review-final <adjudication_review_final.csv>
+        --log <adjudication_log.csv> --adjudicated <adjudicated_25.csv> --human <...human_25.csv> --llm <...LLM.csv>
+        (backs both targets up to .bak, fills the log and adjudicated sheet, runs check_adjudication)
     python backend/corpus/validation.py score --llm <validation_sheet_LLM.csv>
         --human <validation_sheet_human_25.csv> --adjudicated <adjudicated_25.csv>
         --log <adjudication_log.csv>       (one command; wrapped here)
@@ -114,10 +117,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import math
+import os
 import random
 import re
+import shutil
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -345,28 +351,32 @@ def make_human_sheet(work_dir: Path, out: Callable[[str], None] = print) -> dict
 
 # --- labels and metrics ---------------------------------------------------------
 
+def parse_label_row(row: dict[str, str], where: str) -> dict[str, Any]:
+    """Validate one sheet row (the rules read_labels applies) and return its parsed labels."""
+    in_scope = (row.get("in_scope") or "").strip().lower()
+    charge = (row.get("section_as_charge") or "").strip().lower()
+    split = (row.get("split_correct") or "").strip().lower()
+    if in_scope not in LABEL_VALUES["in_scope"]:
+        raise ValueError(f"{where}: in_scope must be yes/no/unsure, got {in_scope!r}")
+    if charge not in LABEL_VALUES["section_as_charge"]:
+        raise ValueError(f"{where}: section_as_charge must be yes/no, got {charge!r}")
+    if in_scope == "yes" and charge == "yes":
+        raise ValueError(f"{where}: section_as_charge must be no when in_scope is yes (the court decides it)")
+    if split and split not in LABEL_VALUES["split_correct"]:
+        raise ValueError(f"{where}: split_correct must be yes/no/na")
+    return {
+        "in_scope": in_scope,
+        "section_as_charge": charge,
+        "sections": {s for s in re.findall(r"\d{2,3}", row.get("sections_at_issue") or "")},
+        "split_correct": split or "na",
+    }
+
+
 def read_labels(path: Path) -> dict[str, dict[str, Any]]:
     labels = {}
-    with path.open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8-sig") as f:  # -sig: a BOM must not hide the first column
         for row in csv.DictReader(f):
-            where = f"{path.name} item {row.get('item')}"
-            in_scope = row["in_scope"].strip().lower()
-            charge = row.get("section_as_charge", "").strip().lower()
-            split = row.get("split_correct", "").strip().lower()
-            if in_scope not in LABEL_VALUES["in_scope"]:
-                raise ValueError(f"{where}: in_scope must be yes/no/unsure, got {in_scope!r}")
-            if charge not in LABEL_VALUES["section_as_charge"]:
-                raise ValueError(f"{where}: section_as_charge must be yes/no, got {charge!r}")
-            if in_scope == "yes" and charge == "yes":
-                raise ValueError(f"{where}: section_as_charge must be no when in_scope is yes (the court decides it)")
-            if split and split not in LABEL_VALUES["split_correct"]:
-                raise ValueError(f"{where}: split_correct must be yes/no/na")
-            labels[row["doc_id"]] = {
-                "in_scope": in_scope,
-                "section_as_charge": charge,
-                "sections": {s for s in re.findall(r"\d{2,3}", row.get("sections_at_issue", ""))},
-                "split_correct": split or "na",
-            }
+            labels[row["doc_id"]] = parse_label_row(row, f"{path.name} item {row.get('item')}")
     return labels
 
 
@@ -530,7 +540,7 @@ LOG_COLUMNS = ("doc_id", "field", "human_blind", "llm", "final", "note")
 
 def read_log(path: Path) -> list[dict[str, str]]:
     """adjudication_log.csv: one row per LLM/human disagreement on the 25."""
-    with path.open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         missing = [c for c in LOG_COLUMNS if c not in (reader.fieldnames or [])]
         if missing:
@@ -591,7 +601,7 @@ REVIEW_COLUMNS = (
 
 
 def _raw_rows(path: Path) -> dict[str, dict[str, str]]:
-    with path.open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8-sig") as f:
         return {row["doc_id"]: row for row in csv.DictReader(f)}
 
 
@@ -648,6 +658,135 @@ def write_disagreements(llm_path: Path, human_path: Path, out_dir: Path,
     for p in paths.values():
         out(f"Wrote {p}")
     return summary
+
+
+FINAL_VALUES = {"in_scope": LABEL_VALUES["in_scope"], "section_as_charge": LABEL_VALUES["section_as_charge"],
+                "split_correct": LABEL_VALUES["split_correct"]}
+BOM = b"\xef\xbb\xbf"
+
+
+def _read_table(path: Path) -> dict[str, Any]:
+    """Raw CSV table plus its byte format (BOM, line ending), so it can be rewritten unchanged elsewhere."""
+    data = path.read_bytes()
+    rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig"), newline="")))
+    if not rows:
+        raise ValueError(f"{path.name}: empty file")
+    return {"bom": data.startswith(BOM), "newline": "\r\n" if b"\r\n" in data else "\n",
+            "header": rows[0], "rows": rows[1:]}
+
+
+def _write_table(path: Path, table: dict[str, Any]) -> None:
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator=table["newline"])
+    writer.writerow(table["header"])
+    writer.writerows(table["rows"])
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes((BOM if table["bom"] else b"") + buf.getvalue().encode("utf-8"))
+    os.replace(tmp, path)
+
+
+def _column(table: dict[str, Any], name: str, path: Path) -> int:
+    if name not in table["header"]:
+        raise ValueError(f"{path.name}: missing column {name!r}")
+    return table["header"].index(name)
+
+
+def apply_adjudication(review_final: Path, log_path: Path, adjudicated_path: Path, human_path: Path,
+                       llm_path: Path, out: Callable[[str], None] = print) -> dict[str, Any]:
+    """Apply the human's final labels from the review-final file to the log and adjudicated_25.csv.
+
+    Review row i pairs with log row i. Every check runs before any write, and any
+    failure aborts with nothing changed. Errors name row numbers or doc_ids, never
+    labels. Both targets are backed up to <name>.bak first; afterwards
+    check_adjudication runs on the written files (subset = doc_ids in --human).
+    """
+    with review_final.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        needed = ["field", "final", "note"] + [f"{who}_{fld}" for who in ("human", "llm") for fld in ADJUDICATED_FIELDS]
+        missing_cols = [c for c in needed if c not in (reader.fieldnames or [])]
+        if missing_cols:
+            raise ValueError(f"{review_final.name}: missing columns {missing_cols}")
+        review = [{k: (v or "").strip() for k, v in row.items() if k is not None} for row in reader]
+    log = read_log(log_path)
+    human, llm = read_labels(human_path), read_labels(llm_path)
+    subset = list(human)
+
+    if len(review) != len(log):
+        raise ValueError(f"{review_final.name} has {len(review)} rows but {log_path.name} has {len(log)}; nothing changed")
+    errors = []
+    for i, (r, row) in enumerate(zip(review, log), start=1):
+        field = r["field"].lower()
+        if field not in ADJUDICATED_FIELDS:
+            errors.append(f"row {i}: unknown field")
+            continue
+        if (row["field"], row["human_blind"], row["llm"]) != (field, r[f"human_{field}"].lower(), r[f"llm_{field}"].lower()):
+            errors.append(f"row {i}: log field/human_blind/llm do not match the review row")
+        elif row["doc_id"] not in human:
+            errors.append(f"row {i}: log doc_id is not in the human sheet")
+        elif row["human_blind"] != human[row["doc_id"]][field]:
+            errors.append(f"row {i}: log human_blind does not match the blind human sheet")
+        elif row["doc_id"] not in llm or row["llm"] != llm[row["doc_id"]][field]:
+            errors.append(f"row {i}: log llm does not match the LLM sheet")
+    if errors:
+        raise ValueError("review and log do not pair up; nothing changed:\n  " + "\n  ".join(errors))
+
+    incomplete = [i for i, r in enumerate(review, start=1)
+                  if r["final"].lower() not in FINAL_VALUES[r["field"].lower()] or not r["note"]]
+    if incomplete:
+        raise ValueError(f"rows with an empty or invalid final, or an empty note: {incomplete}; nothing changed")
+
+    table = _read_table(adjudicated_path)
+    id_col = _column(table, "doc_id", adjudicated_path)
+    ids = [row[id_col] if id_col < len(row) else "" for row in table["rows"]]
+    current = read_labels(adjudicated_path)
+    bad_ids = sorted({row["doc_id"] for row in log if ids.count(row["doc_id"]) != 1})
+    if bad_ids:
+        raise ValueError(f"{adjudicated_path.name}: doc_ids not present exactly once: {bad_ids}; nothing changed")
+    edited = sorted(d for d in subset if d not in current
+                    or any(current[d][fld] != human[d][fld] for fld in ADJUDICATED_FIELDS))
+    if edited:
+        raise ValueError(f"{adjudicated_path.name} already differs from the blind human sheet for: {edited}; "
+                         "start from a fresh copy; nothing changed")
+
+    log_table = _read_table(log_path)
+    final_col, note_col = _column(log_table, "final", log_path), _column(log_table, "note", log_path)
+    changed = 0
+    for r, row, raw in zip(review, log, log_table["rows"]):
+        final = r["final"].lower()
+        raw += [""] * (max(final_col, note_col) + 1 - len(raw))
+        raw[final_col], raw[note_col] = final, r["note"]
+        if final != row["human_blind"]:
+            target = table["rows"][ids.index(row["doc_id"])]
+            col = _column(table, row["field"], adjudicated_path)
+            target += [""] * (col + 1 - len(target))
+            target[col] = final
+            changed += 1
+    inconsistent = []
+    for d, raw in zip(ids, table["rows"]):
+        try:
+            parse_label_row(dict(zip(table["header"], raw)), d)
+        except ValueError:
+            inconsistent.append(d)
+    if inconsistent:
+        raise ValueError(f"result would break the label rules for: {sorted(inconsistent)}; nothing changed")
+
+    baks = [p.with_name(p.name + ".bak") for p in (log_path, adjudicated_path)]
+    existing = [str(b) for b in baks if b.exists()]
+    if existing:
+        raise ValueError(f"refusing to overwrite existing backups: {existing}; nothing changed")
+    for src, bak in zip((log_path, adjudicated_path), baks):
+        shutil.copyfile(src, bak)
+    _write_table(log_path, log_table)
+    _write_table(adjudicated_path, table)
+
+    try:
+        check_adjudication(subset, llm, human, read_labels(adjudicated_path), read_log(log_path))
+        passed, problems = True, 0
+    except ValueError as e:  # its message lists labels per item: report only the count
+        passed, problems = False, max(1, str(e).count("\n  "))
+    out(f"Applied {len(log)} rows; {changed} labels changed; check_adjudication: "
+        + ("passed" if passed else f"FAILED ({problems} problems)"))
+    return {"applied": len(log), "changed": changed, "check_passed": passed}
 
 
 def _evaluate(items: list[dict[str, Any]], gold: dict[str, dict], key: dict[str, Any],
@@ -855,6 +994,12 @@ def main(argv: list[str] | None = None) -> int:
     dis.add_argument("--llm", type=Path, required=True, help="validation_sheet_LLM.csv (all 55)")
     dis.add_argument("--human", type=Path, required=True, help=f"blind {HUMAN_SHEET}, filled in")
     dis.add_argument("--out-dir", type=Path, required=True, help="directory outside the repository")
+    app = sub.add_parser("apply-adjudication", help="apply final labels to the log and adjudicated_25.csv, then check")
+    app.add_argument("--review-final", type=Path, required=True, help="adjudication_review_final.csv (+ final, note)")
+    app.add_argument("--log", type=Path, required=True, help="adjudication_log.csv")
+    app.add_argument("--adjudicated", type=Path, required=True, help="adjudicated_25.csv")
+    app.add_argument("--human", type=Path, required=True, help=f"blind {HUMAN_SHEET}; its doc_ids are the subset")
+    app.add_argument("--llm", type=Path, required=True, help="validation_sheet_LLM.csv (all 55)")
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     work_dir = args.work_dir.expanduser()
@@ -870,6 +1015,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "disagreements":
         write_disagreements(args.llm, args.human, args.out_dir)
         return 0
+    if args.command == "apply-adjudication":
+        result = apply_adjudication(args.review_final, args.log, args.adjudicated, args.human, args.llm)
+        return 0 if result["check_passed"] else 1
     target = work_dir / "validation"
     key = json.loads((target / "validation_key.json").read_text(encoding="utf-8"))
     run_path = args.llm_run or target / "llm_run.json"
