@@ -98,6 +98,10 @@ Usage (run only after the full extraction has finished):
     python backend/corpus/validation.py sheet          # draws 55 + 5, writes key and calibration sheet
     python backend/corpus/validation.py human-sheet    # adds human_subset to the key, writes the 25 sheet
     python backend/corpus/llm_label.py --dry-run       # then without --dry-run: LLM labels for all 55
+    python backend/corpus/validation.py disagreements --llm <validation_sheet_LLM.csv>
+        --human <validation_sheet_human_25.csv> --out-dir <dir outside the repo>
+        (writes adjudication_review.csv, adjudicated_25.csv, adjudication_log.csv; then the human fills in
+        final + note in the log and edits adjudicated_25.csv)
     python backend/corpus/validation.py score --llm <validation_sheet_LLM.csv>
         --human <validation_sheet_human_25.csv> --adjudicated <adjudicated_25.csv>
         --log <adjudication_log.csv>       (one command; wrapped here)
@@ -577,6 +581,75 @@ def check_adjudication(subset: list[str], llm: dict, human: dict, adjudicated: d
             "logged_rows": len(log)}
 
 
+REPO_DIR = BACKEND_DIR.parent
+REVIEW_FILE, ADJUDICATED_FILE, LOG_FILE = "adjudication_review.csv", "adjudicated_25.csv", "adjudication_log.csv"
+REVIEW_COLUMNS = (
+    "item", "field", "title", "citation", "pdf_url",
+    "human_in_scope", "human_section_as_charge", "human_split_correct", "human_sections_at_issue", "human_notes",
+    "llm_in_scope", "llm_section_as_charge", "llm_split_correct", "llm_sections_at_issue", "llm_reason",
+)  # no doc_id, strata, judgment text (body_starts_with) or key contents
+
+
+def _raw_rows(path: Path) -> dict[str, dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as f:
+        return {row["doc_id"]: row for row in csv.DictReader(f)}
+
+
+def write_disagreements(llm_path: Path, human_path: Path, out_dir: Path,
+                        out: Callable[[str], None] = print) -> dict[str, int]:
+    """Prepare adjudication of the 25: review sheet, editable adjudicated copy, prefilled log.
+
+    A disagreement is a (document, field) pair in ADJUDICATED_FIELDS where the
+    validated human and LLM values differ ('unsure' is a value). The log rows
+    carry the blind human and LLM values and leave ``final`` and ``note`` empty,
+    so check_adjudication fails until the human fills them in.
+    """
+    out_dir = out_dir.expanduser().resolve()
+    if out_dir.is_relative_to(REPO_DIR.resolve()):
+        raise ValueError(f"--out-dir must be outside the repository ({REPO_DIR}); got {out_dir}")
+    paths = {name: out_dir / name for name in (REVIEW_FILE, ADJUDICATED_FILE, LOG_FILE)}
+    existing = [str(p) for p in paths.values() if p.exists()]
+    if existing:
+        raise ValueError(f"refusing to overwrite existing files: {existing}")
+    llm, human = read_labels(llm_path), read_labels(human_path)
+    missing = [d for d in human if d not in llm]
+    if missing:
+        raise ValueError(f"{llm_path.name}: missing {len(missing)} of the human-labelled documents")
+    llm_raw, human_raw = _raw_rows(llm_path), _raw_rows(human_path)
+
+    review, log, counts = [], [], Counter()
+    for d in human:  # human sheet order
+        h_row, m_row = human_raw[d], llm_raw[d]
+        for field in ADJUDICATED_FIELDS:
+            if human[d][field] == llm[d][field]:
+                continue
+            counts[field] += 1
+            review.append({
+                "item": h_row.get("item", ""), "field": field, "title": h_row.get("title", ""),
+                "citation": h_row.get("citation", ""), "pdf_url": h_row.get("pdf_url", ""),
+                **{f"human_{f}": human[d][f] for f in ADJUDICATED_FIELDS},
+                "human_sections_at_issue": h_row.get("sections_at_issue", ""), "human_notes": h_row.get("notes", ""),
+                **{f"llm_{f}": llm[d][f] for f in ADJUDICATED_FIELDS},
+                "llm_sections_at_issue": m_row.get("sections_at_issue", ""), "llm_reason": m_row.get("reason", ""),
+            })
+            log.append({"doc_id": d, "field": field, "human_blind": human[d][field], "llm": llm[d][field],
+                        "final": "", "note": ""})
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, columns, rows in ((REVIEW_FILE, REVIEW_COLUMNS, review), (LOG_FILE, LOG_COLUMNS, log)):
+        with paths[name].open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+    paths[ADJUDICATED_FILE].write_bytes(human_path.read_bytes())  # final labels: start from the blind human sheet
+
+    summary = {f: counts[f] for f in ADJUDICATED_FIELDS}
+    out(f"Disagreements: {len(log)} ({', '.join(f'{f} {n}' for f, n in summary.items())})")
+    for p in paths.values():
+        out(f"Wrote {p}")
+    return summary
+
+
 def _evaluate(items: list[dict[str, Any]], gold: dict[str, dict], key: dict[str, Any],
               resamples: int) -> dict[str, Any]:
     pop, seed = key["population"], key["seed"]
@@ -778,6 +851,10 @@ def main(argv: list[str] | None = None) -> int:
     scoring.add_argument("--adjudicated", type=Path, required=True, help="adjudicated_25.csv (final labels)")
     scoring.add_argument("--log", type=Path, required=True, help="adjudication_log.csv")
     scoring.add_argument("--llm-run", type=Path, default=None, help="llm_run.json (default: <work-dir>/validation/)")
+    dis = sub.add_parser("disagreements", help="write the adjudication review sheet, adjudicated copy and prefilled log")
+    dis.add_argument("--llm", type=Path, required=True, help="validation_sheet_LLM.csv (all 55)")
+    dis.add_argument("--human", type=Path, required=True, help=f"blind {HUMAN_SHEET}, filled in")
+    dis.add_argument("--out-dir", type=Path, required=True, help="directory outside the repository")
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8")
     work_dir = args.work_dir.expanduser()
@@ -789,6 +866,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "human-sheet":
         make_human_sheet(work_dir)
+        return 0
+    if args.command == "disagreements":
+        write_disagreements(args.llm, args.human, args.out_dir)
         return 0
     target = work_dir / "validation"
     key = json.loads((target / "validation_key.json").read_text(encoding="utf-8"))

@@ -407,3 +407,132 @@ def test_read_log_requires_columns(tmp_path: Path) -> None:
     (tmp_path / "ok.csv").write_text(",".join(v.LOG_COLUMNS) + "\nE1,In_Scope,No,Yes,No,Kept as is\n",
                                      encoding="utf-8")
     assert v.read_log(tmp_path / "ok.csv") == [log_row("e1", "in_scope", "no", "yes", "no", "Kept as is")]
+
+
+# --- disagreements subcommand ---------------------------------------------------
+
+def write_sheet_rows(path: Path, rows: list[dict], columns: tuple[str, ...]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=columns)
+        w.writeheader()
+        for i, row in enumerate(rows, start=1):
+            w.writerow({"item": i, "title": f"Title {row['doc_id']}", "citation": f"Cit {row['doc_id']}",
+                        "pdf_url": f"https://example.test/{row['doc_id']}.pdf",
+                        "body_starts_with": "SECRET JUDGMENT TEXT", **row})
+
+
+def disagreement_sheets(tmp_path: Path) -> tuple[Path, Path]:
+    human = [
+        {"doc_id": "h1", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes",
+         "sections_at_issue": "302", "notes": "clear conviction"},          # agrees
+        {"doc_id": "h2", "in_scope": "unsure", "section_as_charge": "no", "split_correct": "yes",
+         "sections_at_issue": "", "notes": "hard"},                         # unsure vs no
+        {"doc_id": "h3", "in_scope": "no", "section_as_charge": "yes", "split_correct": "yes",
+         "sections_at_issue": "304", "notes": "bail"},                      # charge only
+        {"doc_id": "h4", "in_scope": "yes", "section_as_charge": "no", "split_correct": "no",
+         "sections_at_issue": "300", "notes": ""},                          # split only
+    ]
+    llm = [
+        {"doc_id": "other", "in_scope": "no", "section_as_charge": "no", "split_correct": "yes", "reason": "x"},
+        {"doc_id": "h4", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes",
+         "sections_at_issue": "300", "reason": "R4"},
+        {"doc_id": "h3", "in_scope": "no", "section_as_charge": "no", "split_correct": "yes",
+         "sections_at_issue": "", "reason": "R3"},
+        {"doc_id": "h2", "in_scope": "no", "section_as_charge": "no", "split_correct": "yes",
+         "sections_at_issue": "", "reason": "R2"},
+        {"doc_id": "h1", "in_scope": "yes", "section_as_charge": "no", "split_correct": "yes",
+         "sections_at_issue": "302", "reason": "R1"},
+    ]
+    write_sheet_rows(tmp_path / "human.csv", human, v.SHEET_COLUMNS)
+    write_sheet_rows(tmp_path / "llm.csv", llm, v.SHEET_COLUMNS + ("reason",))
+    return tmp_path / "llm.csv", tmp_path / "human.csv"
+
+
+def read_csv(path: Path) -> tuple[list[str], list[dict]]:
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return list(reader.fieldnames or []), list(reader)
+
+
+def test_disagreements_writes_review_copy_and_log(tmp_path: Path) -> None:
+    llm_path, human_path = disagreement_sheets(tmp_path)
+    out_dir, printed = tmp_path / "adj", []
+    summary = v.write_disagreements(llm_path, human_path, out_dir, printed.append)
+    assert summary == {"in_scope": 1, "section_as_charge": 1, "split_correct": 1}
+
+    header, review = read_csv(out_dir / v.REVIEW_FILE)
+    assert tuple(header) == v.REVIEW_COLUMNS
+    assert not {"doc_id", "stratum", "body_starts_with"} & set(header)
+    assert "SECRET" not in (out_dir / v.REVIEW_FILE).read_text(encoding="utf-8")
+    assert [(r["item"], r["field"]) for r in review] == [("2", "in_scope"), ("3", "section_as_charge"),
+                                                         ("4", "split_correct")]
+    r2 = review[0]
+    assert (r2["title"], r2["citation"], r2["pdf_url"]) == ("Title h2", "Cit h2", "https://example.test/h2.pdf")
+    assert (r2["human_in_scope"], r2["llm_in_scope"], r2["human_notes"], r2["llm_reason"]) == \
+        ("unsure", "no", "hard", "R2")
+    assert (review[1]["human_section_as_charge"], review[1]["llm_section_as_charge"],
+            review[1]["human_sections_at_issue"], review[1]["llm_reason"]) == ("yes", "no", "304", "R3")
+
+    header, log = read_csv(out_dir / v.LOG_FILE)
+    assert tuple(header) == v.LOG_COLUMNS
+    assert [(r["doc_id"], r["field"], r["human_blind"], r["llm"], r["final"], r["note"]) for r in log] == [
+        ("h2", "in_scope", "unsure", "no", "", ""), ("h3", "section_as_charge", "yes", "no", "", ""),
+        ("h4", "split_correct", "no", "yes", "", "")]
+
+    assert (out_dir / v.ADJUDICATED_FILE).read_bytes() == human_path.read_bytes()
+    text = "\n".join(printed)
+    assert printed[0].startswith("Disagreements: 3 ")
+    assert all(str(out_dir / name) in text for name in (v.REVIEW_FILE, v.ADJUDICATED_FILE, v.LOG_FILE))
+    assert "unsure" not in text and "h2" not in text and "R2" not in text
+
+
+def test_disagreements_log_feeds_check_adjudication(tmp_path: Path) -> None:
+    llm_path, human_path = disagreement_sheets(tmp_path)
+    out_dir = tmp_path / "adj"
+    v.write_disagreements(llm_path, human_path, out_dir, lambda _: None)
+    llm, human = v.read_labels(llm_path), v.read_labels(human_path)
+    adjudicated = v.read_labels(out_dir / v.ADJUDICATED_FILE)
+    subset = list(human)
+    with pytest.raises(ValueError, match="does not match sheets"):  # final left empty: incomplete
+        v.check_adjudication(subset, llm, human, adjudicated, v.read_log(out_dir / v.LOG_FILE))
+    _, rows = read_csv(out_dir / v.LOG_FILE)
+    for r in rows:
+        r["final"], r["note"] = r["human_blind"], "kept the human label"
+    with (out_dir / v.LOG_FILE).open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=v.LOG_COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+    result = v.check_adjudication(subset, llm, human, adjudicated, v.read_log(out_dir / v.LOG_FILE))
+    assert result["disagreements"] == {"in_scope": 1, "section_as_charge": 1, "split_correct": 1}
+
+
+def test_disagreements_guards(tmp_path: Path) -> None:
+    llm_path, human_path = disagreement_sheets(tmp_path)
+    with pytest.raises(ValueError, match="outside the repository"):
+        v.write_disagreements(llm_path, human_path, v.REPO_DIR / "backend" / "tmp_adj", lambda _: None)
+    assert not (v.REPO_DIR / "backend" / "tmp_adj").exists()
+
+    out_dir = tmp_path / "adj"
+    v.write_disagreements(llm_path, human_path, out_dir, lambda _: None)
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        v.write_disagreements(llm_path, human_path, out_dir, lambda _: None)
+
+    write_sheet_rows(tmp_path / "llm_short.csv",
+                     [{"doc_id": "h1", "in_scope": "yes", "section_as_charge": "no", "reason": "r"}],
+                     v.SHEET_COLUMNS + ("reason",))
+    with pytest.raises(ValueError, match="missing 3 of the human-labelled documents"):
+        v.write_disagreements(tmp_path / "llm_short.csv", human_path, tmp_path / "adj2", lambda _: None)
+
+    write_labels(tmp_path / "bad.csv", {"h1": ("maybe", "no", "", "")})
+    with pytest.raises(ValueError, match="yes/no/unsure"):
+        v.write_disagreements(llm_path, tmp_path / "bad.csv", tmp_path / "adj3", lambda _: None)
+    assert not (tmp_path / "adj2").exists() and not (tmp_path / "adj3").exists()
+
+
+def test_disagreements_cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    llm_path, human_path = disagreement_sheets(tmp_path)
+    assert v.main(["disagreements", "--llm", str(llm_path), "--human", str(human_path),
+                   "--out-dir", str(tmp_path / "adj")]) == 0
+    printed = capsys.readouterr().out
+    assert "Disagreements: 3 (in_scope 1, section_as_charge 1, split_correct 1)" in printed
+    assert (tmp_path / "adj" / v.LOG_FILE).is_file()
