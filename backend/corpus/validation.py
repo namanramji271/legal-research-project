@@ -98,6 +98,10 @@ Usage (run only after the full extraction has finished):
     python backend/corpus/validation.py sheet          # draws 55 + 5, writes key and calibration sheet
     python backend/corpus/validation.py human-sheet    # adds human_subset to the key, writes the 25 sheet
     python backend/corpus/llm_label.py --dry-run       # then without --dry-run: LLM labels for all 55
+    If kappa missed (validation_result.json: llm_accepted_as_annotator false, scored_at):
+    python backend/corpus/validation.py human-sheet-rest   # blind sheet for the other 30, once
+    python backend/corpus/validation.py score ... --human-rest <validation_sheet_human_30.csv>
+        (human labels gold for all 55; the 30 are not adjudicated; kappa on the 25 stays the criterion)
     python backend/corpus/validation.py disagreements --llm <validation_sheet_LLM.csv>
         --human <validation_sheet_human_25.csv> --out-dir <dir outside the repo>
         (writes adjudication_review.csv, adjudicated_25.csv, adjudication_log.csv; then the human fills in
@@ -117,6 +121,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import math
@@ -127,6 +132,7 @@ import shutil
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -157,6 +163,13 @@ SHEET_COLUMNS = (
     "item", "doc_id", "title", "citation", "pdf_url", "body_starts_with",
     # Annotator fields:
     "in_scope", "section_as_charge", "sections_at_issue", "passing_sections", "split_correct", "notes",
+)
+# The other 30 (labelled by the human only after kappa missed): no passing_sections column.
+HUMAN_REST_SHEET = "validation_sheet_human_30.csv"
+HUMAN_REST_SEED_OFFSET = 3  # order of the 30-sheet; the split-only validation uses seed + 4
+HUMAN_REST_COLUMNS = (
+    "item", "doc_id", "title", "citation", "pdf_url", "body_starts_with",
+    "in_scope", "section_as_charge", "sections_at_issue", "split_correct", "notes",
 )
 LABEL_VALUES = {"in_scope": ("yes", "no", "unsure"), "section_as_charge": ("yes", "no"),
                 "split_correct": ("yes", "no", "na")}
@@ -255,22 +268,28 @@ def _body_start(record: dict[str, Any], chars: int = 150) -> str:
     return re.sub(r"\s+", " ", record.get("body", ""))[:chars]
 
 
-def write_sheet(path: Path, items: list[dict[str, Any]], metadata: dict[str, dict], texts: dict[str, dict],
-                seed: int) -> None:
+def _sheet_bytes(items: list[dict[str, Any]], metadata: dict[str, dict], texts: dict[str, dict], seed: int,
+                 columns: tuple[str, ...] = SHEET_COLUMNS) -> bytes:
+    """A blind sheet: seeded order, title/citation/pdf_url/body start, every annotator column empty."""
     rows = list(items)
     random.Random(seed).shuffle(rows)  # blind: strata cannot be read off the order
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, restval="")
+    writer.writeheader()
+    for i, item in enumerate(rows, start=1):
+        meta = metadata.get(item["doc_id"], {})
+        writer.writerow({
+            "item": i, "doc_id": item["doc_id"], "title": meta.get("title", ""),
+            "citation": meta.get("citation", ""), "pdf_url": meta.get("pdf_url", ""),
+            "body_starts_with": _body_start(texts[item["doc_id"]]),
+        })
+    return buf.getvalue().encode("utf-8")
+
+
+def write_sheet(path: Path, items: list[dict[str, Any]], metadata: dict[str, dict], texts: dict[str, dict],
+                seed: int, columns: tuple[str, ...] = SHEET_COLUMNS) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=SHEET_COLUMNS)
-        writer.writeheader()
-        for i, item in enumerate(rows, start=1):
-            meta = metadata.get(item["doc_id"], {})
-            writer.writerow({
-                "item": i, "doc_id": item["doc_id"], "title": meta.get("title", ""),
-                "citation": meta.get("citation", ""), "pdf_url": meta.get("pdf_url", ""),
-                "body_starts_with": _body_start(texts[item["doc_id"]]),
-                "in_scope": "", "section_as_charge": "", "sections_at_issue": "", "passing_sections": "", "split_correct": "", "notes": "",
-            })
+    path.write_bytes(_sheet_bytes(items, metadata, texts, seed, columns))
 
 
 def make_sheets(work_dir: Path, seed: int = DEFAULT_SEED, dev_path: Path | None = None,
@@ -346,6 +365,83 @@ def make_human_sheet(work_dir: Path, out: Callable[[str], None] = print) -> dict
     path = target / HUMAN_SHEET
     write_sheet(path, items, candidates, texts, key["human_subset_seed"])
     out(f"Wrote {path}: {len(items)} documents" + (f"; WARNING: strata below {HUMAN_PER_STRATUM}: {short}" if short else ""))
+    return key
+
+
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _kappa_missed_basis(result_path: Path) -> dict[str, Any]:
+    """The scoring run that licenses labelling the other 30: LLM not accepted, a kappa value, scored_at."""
+    if not result_path.is_file():
+        raise ValueError(f"{result_path} not found: run `validation.py score` on the 25 first")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if result.get("llm_accepted_as_annotator") is not False:
+        raise ValueError("human-sheet-rest runs only after kappa missed: validation_result.json must have "
+                         "llm_accepted_as_annotator false")
+    kappa = result.get("agreement_llm_vs_human", {}).get("in_scope", {}).get("kappa")
+    if isinstance(kappa, bool) or not isinstance(kappa, (int, float)):
+        raise ValueError("validation_result.json has no kappa value for strict in_scope")
+    if not result.get("scored_at"):
+        raise ValueError("validation_result.json has no scored_at; re-run `validation.py score` to record it")
+    return {"llm_accepted_as_annotator": False, "kappa": kappa, "scored_at": result["scored_at"]}
+
+
+def make_human_rest_sheet(work_dir: Path, out: Callable[[str], None] = print) -> dict[str, Any]:
+    """Write the blind sheet for the sample documents outside human_subset (the other 30), once.
+
+    Only after a scoring run in which kappa missed (copied into the key as
+    ``human_rest_basis``). The sheet is built from the current extracted text;
+    the key records its SHA-256 and each text file's SHA-256, so a later
+    re-extraction (e.g. a split-rule fix) cannot silently change what the
+    annotator sees. An existing sheet is never overwritten.
+    """
+    target = work_dir / "validation"
+    key_path = target / "validation_key.json"
+    key = json.loads(key_path.read_text(encoding="utf-8"))
+    if not key.get("human_subset"):
+        raise ValueError("validation_key.json has no human_subset; run `validation.py human-sheet` first")
+    basis = _kappa_missed_basis(target / "validation_result.json")
+    subset = set(key["human_subset"])
+    if not subset <= {i["doc_id"] for i in key["sample"]}:
+        raise ValueError("validation_key.json: human_subset is not part of the sample")
+    items = [i for i in key["sample"] if i["doc_id"] not in subset]
+    if not items:
+        raise ValueError("validation_key.json: no sample documents outside human_subset")
+    rest = sorted(i["doc_id"] for i in items)
+    raw = {d: (work_dir / "text" / f"{d}.json").read_bytes() for d in rest}
+    text_sha = {d: hashlib.sha256(b).hexdigest() for d, b in raw.items()}
+    texts = {d: json.loads(b.decode("utf-8")) for d, b in raw.items()}
+    candidates = {r["doc_id"]: r for r in load_records(work_dir / "candidates.jsonl")}
+    seed = key["seed"] + HUMAN_REST_SEED_OFFSET
+    sheet = _sheet_bytes(items, candidates, texts, seed, HUMAN_REST_COLUMNS)
+    sheet_sha = hashlib.sha256(sheet).hexdigest()
+    path = target / HUMAN_REST_SHEET
+
+    if "human_rest" in key:
+        if key["human_rest"] != rest:
+            raise ValueError("validation_key.json human_rest differs from the sample minus human_subset")
+        changed = [d for d in rest if key.get("human_rest_text_sha256", {}).get(d) != text_sha[d]]
+        if changed:
+            raise ValueError(f"{len(changed)} of the {len(rest)} documents were re-extracted since the sheet was "
+                             "generated; refusing to regenerate what the annotator sees")
+        if sheet_sha != key.get("human_rest_sheet_sha256"):
+            raise ValueError("the regenerated sheet differs from the recorded one; refusing to write it")
+        if path.exists():
+            out(f"{path} already written; unchanged")
+        else:
+            path.write_bytes(sheet)
+            out(f"Wrote {path}: {len(rest)} documents")
+        return key
+    if path.exists():
+        raise ValueError(f"{path} exists but is not recorded in validation_key.json; refusing to overwrite it")
+    key.update({"human_rest": rest, "human_rest_seed": seed, "human_rest_sheet_sha256": sheet_sha,
+                "human_rest_text_sha256": text_sha, "human_rest_created_at": _now_utc(),
+                "human_rest_basis": basis})
+    key_path.write_text(json.dumps(key, indent=1) + "\n", encoding="utf-8")  # key first: a rerun can then resume
+    path.write_bytes(sheet)
+    out(f"Wrote {path}: {len(rest)} documents")
     return key
 
 
@@ -802,14 +898,27 @@ def _evaluate(items: list[dict[str, Any]], gold: dict[str, dict], key: dict[str,
             "split": split_accuracy(items, gold, seed, resamples)}
 
 
+def _agreement(llm: dict, other: dict, ids: list[str]) -> dict[str, dict[str, Any]]:
+    out = {}
+    for field in ADJUDICATED_FIELDS:
+        xl, xo = [llm[d][field] for d in ids], [other[d][field] for d in ids]
+        out[field] = {"kappa": cohen_kappa(xl, xo),
+                      "raw_agreement": round(sum(x == y for x, y in zip(xl, xo)) / len(ids), 4)}
+    return out
+
+
 def score(key: dict[str, Any], llm: dict, human: dict, adjudicated: dict, log: list[dict[str, str]],
-          llm_run: dict[str, Any] | None = None, resamples: int = BOOTSTRAP_RESAMPLES) -> dict[str, Any]:
+          llm_run: dict[str, Any] | None = None, resamples: int = BOOTSTRAP_RESAMPLES,
+          human_rest: dict | None = None) -> dict[str, Any]:
     """Option B scoring. Acceptance uses point estimates; intervals are reported beside them.
 
     ``llm`` covers all 55, ``human`` (blind) and ``adjudicated`` cover the 25 in
     key["human_subset"]. Kappa is LLM vs blind human on the 25. Gold is the
-    adjudicated label on the 25 plus, only if kappa >= 0.70, the LLM label on
-    the other 30.
+    adjudicated label on the 25 plus, for the other 30: the LLM label if
+    kappa >= 0.70; otherwise the blind human label from ``human_rest`` (labelled
+    after kappa missed, not adjudicated), or nothing (INCOMPLETE).
+    Inclusion and split get separate verdicts (a stated clarification of the
+    protocol, which only says what follows a missed detector threshold).
     """
     items = key["sample"]
     subset = key.get("human_subset")
@@ -820,46 +929,75 @@ def score(key: dict[str, Any], llm: dict, human: dict, adjudicated: dict, log: l
                + [f"adjudicated:{d}" for d in subset if d not in adjudicated])
     if missing:
         raise ValueError(f"labels missing for: {missing}")
-    agreement = {}
-    for field in ADJUDICATED_FIELDS:
-        xl, xh = [llm[d][field] for d in subset], [human[d][field] for d in subset]
-        agreement[field] = {"kappa": cohen_kappa(xl, xh),
-                            "raw_agreement": round(sum(x == y for x, y in zip(xl, xh)) / len(subset), 4)}
+    agreement = _agreement(llm, human, subset)
     adjudication = check_adjudication(subset, llm, human, adjudicated, log)
     kappa = agreement["in_scope"]["kappa"]
     llm_accepted = kappa is not None and kappa >= ACCEPTANCE["kappa"]
 
     in_subset = set(subset)
+    rest_ids = [d for d in ids if d not in in_subset]
+    if human_rest is not None:
+        if llm_accepted:
+            raise ValueError("the LLM was accepted as annotator (kappa >= 0.70), so its labels are gold for the "
+                             "other documents; do not pass human_rest")
+        if "human_rest" not in key:
+            raise ValueError("validation_key.json has no human_rest record; run `validation.py human-sheet-rest` first")
+        if sorted(key["human_rest"]) != sorted(rest_ids):
+            raise ValueError("the sample minus human_subset does not match the key's human_rest")
+        missing = [d for d in rest_ids if d not in human_rest]
+        unexpected = sorted(d for d in human_rest if d not in set(rest_ids))
+        if missing or unexpected:
+            raise ValueError(f"human_rest labels: missing {missing}, unexpected {unexpected}")
+
     gold = {d: adjudicated[d] for d in subset}
     if llm_accepted:
-        gold |= {d: llm[d] for d in ids if d not in in_subset}
+        gold |= {d: llm[d] for d in rest_ids}
+    elif human_rest is not None:
+        gold |= {d: human_rest[d] for d in rest_ids}  # blind, not adjudicated against the rejected LLM
+    complete = len(gold) == len(ids)
     main_items = [i for i in items if i["doc_id"] in gold]
     main = _evaluate(main_items, gold, key, resamples)
     human_only = _evaluate([i for i in items if i["doc_id"] in in_subset], gold, key, resamples)
+    agreement_all = rest_disagreements = blind_all = None
+    if human_rest is not None:
+        blind = {d: human[d] for d in subset} | {d: human_rest[d] for d in rest_ids}
+        agreement_all = {"documents": len(ids), **_agreement(llm, blind, ids)}
+        rest_disagreements = {f: sum(llm[d][f] != human_rest[d][f] for d in rest_ids) for f in ADJUDICATED_FIELDS}
+        blind_all = _evaluate(items, blind, key, resamples)
 
     checks = {
         "kappa": llm_accepted,
         "weighted_precision": (main["primary"]["pooled_weighted"]["precision"] or 0) >= ACCEPTANCE["weighted_precision"],
         "split_accuracy": (main["split"]["accuracy"] or 0) >= ACCEPTANCE["split_accuracy"],
     }
-    if all(checks.values()):
-        verdict = "ACCEPTED"
-    elif not llm_accepted:
+    if not complete:
+        verdict_inclusion = verdict_split = "INCOMPLETE"
         verdict = (f"INCOMPLETE: LLM-human kappa below {ACCEPTANCE['kappa']}; the other "
                    f"{len(ids) - len(subset)} documents await human labels (the main analysis is provisional, "
                    f"{len(subset)} documents only)")
     else:
-        verdict = (f"NOT ACCEPTED: change the rule and validate on a fresh {SAMPLE_SIZE} "
-                   f"(these {SAMPLE_SIZE} become development documents)")
+        verdict_inclusion = ("ACCEPTED" if checks["weighted_precision"] else
+                             f"NOT ACCEPTED: change the inclusion rule and validate it on a fresh {SAMPLE_SIZE} "
+                             f"(these {SAMPLE_SIZE} become development documents for the inclusion rule)")
+        verdict_split = ("ACCEPTED" if checks["split_accuracy"] else
+                         f"NOT ACCEPTED: change the split rule and validate it on fresh documents outside these "
+                         f"{SAMPLE_SIZE} (split only)")
+        both = checks["weighted_precision"] and checks["split_accuracy"]
+        verdict = "ACCEPTED" if both else f"Inclusion {verdict_inclusion}; split {verdict_split}"
     return {"design": "option_b", "agreement_llm_vs_human": agreement, "overlap": len(subset),
+            "agreement_llm_vs_human_all": agreement_all,
             "adjudication": adjudication, "llm_accepted_as_annotator": llm_accepted,
-            "gold_sources": {"adjudicated_human": len(subset),
-                             "llm": len(gold) - len(subset), "unused_pending_human": len(ids) - len(gold)},
-            "main": main, "sensitivity_human_25": human_only, "llm_run": llm_run or {},
+            "gold_sources": {"adjudicated_human": len(subset), "human_rest": len(human_rest or {}),
+                             "llm": len(rest_ids) if llm_accepted else 0,
+                             "unused_pending_human": len(ids) - len(gold)},
+            "human_rest_disagreements_llm_vs_human": rest_disagreements,
+            "main": main, "sensitivity_human_25": human_only, "sensitivity_blind_human_all": blind_all,
+            "llm_run": llm_run or {},
             "intervals": {"confidence": 0.95, "per_stratum": "wilson", "pooled_and_split": "stratified percentile bootstrap",
                           "bootstrap_resamples": resamples, "bootstrap_seed": key["seed"]},
             "acceptance": ACCEPTANCE, "acceptance_on": "point estimates", "checks": checks,
-            "accepted": all(checks.values()), "verdict": verdict}
+            "accepted": complete and checks["weighted_precision"] and checks["split_accuracy"],
+            "verdict_inclusion": verdict_inclusion, "verdict_split": verdict_split, "verdict": verdict}
 
 
 def _fmt(value: float | None, ci: list[float] | None) -> str:
@@ -947,13 +1085,65 @@ def _kappa(value: float | None) -> str:
     return "undefined (both used one identical label)" if value is None else str(value)
 
 
+def _human_rest_section(result: dict[str, Any], key: dict[str, Any], not_recorded: str) -> str:
+    """The other 30, labelled by the human after kappa missed: statement, descriptive kappa, sensitivity."""
+    n_rest = result["gold_sources"]["human_rest"]
+    if not n_rest:
+        return ""
+    overlap, all_ = result["overlap"], result["agreement_llm_vs_human_all"]
+    n_all, basis = all_["documents"], key.get("human_rest_basis", {})
+    lines = [
+        f"## The other {n_rest}: human labels after κ missed",
+        "",
+        f"κ on the pre-registered {overlap} was {_kappa(result['agreement_llm_vs_human']['in_scope']['kappa'])} "
+        f"(< {ACCEPTANCE['kappa']}), so the LLM was not accepted as an annotator. As the protocol prescribes, "
+        f"a legally trained human then labelled the other {n_rest} blind (sheet generated "
+        f"{key.get('human_rest_created_at', not_recorded)}, after the scoring run of "
+        f"{basis.get('scored_at', not_recorded)}). These {n_rest} were not adjudicated against the LLM: it was not "
+        "accepted as an annotator, so neither its labels nor its reasons enter their gold; the blind human labels "
+        "are gold directly.",
+        "",
+        f"Limitation: before labelling the {n_rest}, the annotator had read the LLM's reasons for the {overlap} "
+        "during adjudication.",
+        "",
+        f"Agreement, LLM vs blind human over all {n_all} (descriptive, not an acceptance criterion; κ on the "
+        f"{overlap} stays the criterion):",
+        "",
+        f"- Strict `in_scope`: κ **{_kappa(all_['in_scope']['kappa'])}**, raw agreement {all_['in_scope']['raw_agreement']}",
+        f"- `section_as_charge`: κ {_kappa(all_['section_as_charge']['kappa'])}, "
+        f"raw agreement {all_['section_as_charge']['raw_agreement']}",
+        f"- `split_correct`: κ {_kappa(all_['split_correct']['kappa'])}, "
+        f"raw agreement {all_['split_correct']['raw_agreement']}",
+        f"- LLM-human disagreements on the {n_rest} (not adjudicated): "
+        f"{json.dumps(result['human_rest_disagreements_llm_vs_human'])}",
+        "",
+        f"## Sensitivity analysis: blind human labels on all {n_all}",
+        "",
+        "The same metrics on the unadjudicated blind human labels for every document.",
+        "",
+        _analysis_block(result["sensitivity_blind_human_all"], f"Blind human, all {n_all}"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_report(result: dict[str, Any], key: dict[str, Any]) -> str:
     agreement, run = result["agreement_llm_vs_human"], result["llm_run"]
     adj, sources = result["adjudication"], result["gold_sources"]
     quotas = key["quotas"].values()
     not_recorded = "NOT RECORDED"
-    main_heading = "All adjudicated documents" if result["llm_accepted_as_annotator"] else "Provisional (25 only)"
+    if sources["human_rest"]:
+        main_heading = (f"All {result['main']['documents']} (adjudicated human {sources['adjudicated_human']} "
+                        f"+ blind human {sources['human_rest']})")
+    elif result["llm_accepted_as_annotator"]:
+        main_heading = "All adjudicated documents"
+    else:
+        main_heading = "Provisional (25 only)"
     return Template(TEMPLATE_PATH.read_text(encoding="utf-8")).substitute(
+        scored_at=result.get("scored_at", not_recorded),
+        gold_human_rest=sources["human_rest"],
+        human_rest_section=_human_rest_section(result, key, not_recorded),
+        verdict_inclusion=result["verdict_inclusion"], verdict_split=result["verdict_split"],
         seed=key["seed"], population=json.dumps(key["population"]), quotas=json.dumps(key["quotas"]),
         min_quota=min(quotas), max_quota=max(quotas), human_per_stratum=HUMAN_PER_STRATUM,
         human_subset_seed=key.get("human_subset_seed", not_recorded), overlap=result["overlap"],
@@ -986,12 +1176,15 @@ def main(argv: list[str] | None = None) -> int:
     sheet = sub.add_parser("sheet", help=f"draw the {SAMPLE_SIZE} + 5, write the key and the calibration sheet")
     sheet.add_argument("--seed", type=int, default=DEFAULT_SEED)
     sub.add_parser("human-sheet", help=f"record the human subset in the key and write {HUMAN_SHEET}")
+    sub.add_parser("human-sheet-rest", help=f"after kappa missed: write {HUMAN_REST_SHEET} for the other documents")
     scoring = sub.add_parser("score", help="Option B: LLM-human agreement, adjudication check and metrics")
     scoring.add_argument("--llm", type=Path, required=True, help="validation_sheet_LLM.csv (all 55)")
     scoring.add_argument("--human", type=Path, required=True, help=f"blind {HUMAN_SHEET}, filled in")
     scoring.add_argument("--adjudicated", type=Path, required=True, help="adjudicated_25.csv (final labels)")
     scoring.add_argument("--log", type=Path, required=True, help="adjudication_log.csv")
     scoring.add_argument("--llm-run", type=Path, default=None, help="llm_run.json (default: <work-dir>/validation/)")
+    scoring.add_argument("--human-rest", type=Path, default=None,
+                         help=f"{HUMAN_REST_SHEET}, filled in (only after kappa missed)")
     dis = sub.add_parser("disagreements", help="write the adjudication review sheet, adjudicated copy and prefilled log")
     dis.add_argument("--llm", type=Path, required=True, help="validation_sheet_LLM.csv (all 55)")
     dis.add_argument("--human", type=Path, required=True, help=f"blind {HUMAN_SHEET}, filled in")
@@ -1014,6 +1207,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "human-sheet":
         make_human_sheet(work_dir)
         return 0
+    if args.command == "human-sheet-rest":
+        make_human_rest_sheet(work_dir)
+        return 0
     if args.command == "disagreements":
         write_disagreements(args.llm, args.human, args.out_dir)
         return 0
@@ -1025,7 +1221,8 @@ def main(argv: list[str] | None = None) -> int:
     run_path = args.llm_run or target / "llm_run.json"
     llm_run = json.loads(run_path.read_text(encoding="utf-8")) if run_path.is_file() else None
     result = score(key, read_labels(args.llm), read_labels(args.human), read_labels(args.adjudicated),
-                   read_log(args.log), llm_run)
+                   read_log(args.log), llm_run, human_rest=read_labels(args.human_rest) if args.human_rest else None)
+    result["scored_at"] = _now_utc()  # only addition to score()'s output; licenses human-sheet-rest
     (target / "validation_result.json").write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
     report = render_report(result, key)
     (target / "validation_report.md").write_text(report, encoding="utf-8")

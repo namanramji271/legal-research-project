@@ -313,7 +313,7 @@ def test_score_option_b_accepted_uses_llm_gold_for_the_rest() -> None:
     result = v.score(key, llm, human, human, [], resamples=200)
     assert result["agreement_llm_vs_human"]["in_scope"] == {"kappa": 1.0, "raw_agreement": 1.0}
     assert result["llm_accepted_as_annotator"] is True
-    assert result["gold_sources"] == {"adjudicated_human": 4, "llm": 6, "unused_pending_human": 0}
+    assert result["gold_sources"] == {"adjudicated_human": 4, "human_rest": 0, "llm": 6, "unused_pending_human": 0}
     assert result["main"]["documents"] == 10 and result["sensitivity_human_25"]["documents"] == 4
     assert result["sensitivity_human_25"]["per_stratum_n"]["explicit"] == 2
     assert result["main"]["primary"]["pooled_weighted"]["precision"] == 1.0
@@ -331,7 +331,7 @@ def test_score_option_b_kappa_missed_is_incomplete_and_human_wins() -> None:
     # llm y,y,n,n vs human y,n,n,y: p_o 0.5, p_e 0.5 -> kappa 0
     assert result["agreement_llm_vs_human"]["in_scope"]["kappa"] == 0.0
     assert result["llm_accepted_as_annotator"] is False and result["checks"]["kappa"] is False
-    assert result["gold_sources"] == {"adjudicated_human": 4, "llm": 0, "unused_pending_human": 6}
+    assert result["gold_sources"] == {"adjudicated_human": 4, "human_rest": 0, "llm": 0, "unused_pending_human": 6}
     assert result["main"]["documents"] == 4  # the other 30 (here 6) are not used
     assert result["main"]["primary"]["per_stratum"]["explicit"]["fp"] == 1  # human label (no) won
     assert result["adjudication"]["disagreements"]["in_scope"] == 2
@@ -770,3 +770,302 @@ def test_score_path_with_mixed_case_doc_ids(tmp_path: Path) -> None:
     assert result["adjudication"]["disagreements"] == {"in_scope": 1, "section_as_charge": 1, "split_correct": 0}
     assert result["adjudication"]["changed_from_blind_human"]["in_scope"] == 1
     assert result["adjudication"]["logged_rows"] == 2
+
+
+# --- the other 30: human-sheet-rest and score(human_rest) --------------------------
+
+import hashlib  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
+SCORED_AT = "2026-11-27T10:00:00+00:00"
+
+
+def rest_work_dir(tmp_path: Path, result: dict | None = None) -> dict:
+    """A synthetic work dir with a 55 + 25 key and a kappa-missed validation_result.json."""
+    candidates = []
+    for kind in BODIES:
+        for i in range(20):
+            doc_id = f"{kind}_{i:02d}"
+            candidates.append({"doc_id": doc_id, "year": 1975, "title": f"T {doc_id}", "citation": "C",
+                               "pdf_url": f"https://example.test/{doc_id}.pdf"})
+            path = tmp_path / "text" / f"{doc_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record(doc_id, kind)), encoding="utf-8")
+    (tmp_path / "candidates.jsonl").write_text("\n".join(json.dumps(c) for c in candidates), encoding="utf-8")
+    dev = tmp_path / "dev.json"
+    dev.write_text(json.dumps({"documents": []}), encoding="utf-8")
+    key = v.make_sheets(tmp_path, seed=3, dev_path=dev, out=lambda _: None)
+    if result is None:
+        result = {"llm_accepted_as_annotator": False,
+                  "agreement_llm_vs_human": {"in_scope": {"kappa": 0.41, "raw_agreement": 0.72}},
+                  "scored_at": SCORED_AT}
+    (tmp_path / "validation" / "validation_result.json").write_text(json.dumps(result), encoding="utf-8")
+    return key
+
+
+def rest_paths(tmp_path: Path) -> tuple[Path, Path]:
+    return tmp_path / "validation" / v.HUMAN_REST_SHEET, tmp_path / "validation" / "validation_key.json"
+
+
+def test_human_rest_sheet_written_blind_seeded_and_recorded(tmp_path: Path) -> None:
+    key0 = rest_work_dir(tmp_path / "a")
+    printed: list[str] = []
+    key = v.make_human_rest_sheet(tmp_path / "a", out=printed.append)
+    sheet, key_path = rest_paths(tmp_path / "a")
+    assert printed == [f"Wrote {sheet}: 30 documents"]
+
+    header, rows = read_csv(sheet)
+    assert tuple(header) == v.HUMAN_REST_COLUMNS
+    assert "passing_sections" not in header and "stratum" not in header and "reason" not in header
+    rest = [i["doc_id"] for i in key0["sample"] if i["doc_id"] not in set(key0["human_subset"])]
+    assert len(rows) == 30 and {r["doc_id"] for r in rows} == set(rest)
+    assert [r["item"] for r in rows] == [str(i) for i in range(1, 31)]
+    fill = ("in_scope", "section_as_charge", "sections_at_issue", "split_correct", "notes")
+    assert all(r[c] == "" for r in rows for c in fill)
+    texts = {d: json.loads((tmp_path / "a" / "text" / f"{d}.json").read_text(encoding="utf-8")) for d in rest}
+    assert all(r["body_starts_with"] == v._body_start(texts[r["doc_id"]]) for r in rows)
+    assert all(r["title"] == f"T {r['doc_id']}" and r["pdf_url"].endswith(f"{r['doc_id']}.pdf") for r in rows)
+    # Shuffled: neither key order nor grouped by stratum.
+    order = [r["doc_id"] for r in rows]
+    assert order != rest and order != sorted(rest)
+    strata = {i["doc_id"]: i["stratum"] for i in key0["sample"]}
+    assert len({strata[d] for d in order[:6]}) > 1
+
+    # Recorded in the key; sample and human subset untouched.
+    saved = json.loads(key_path.read_text(encoding="utf-8"))
+    assert saved == key
+    assert saved["sample"] == key0["sample"] and saved["human_subset"] == key0["human_subset"]
+    assert saved["human_rest"] == sorted(rest) and saved["human_rest_seed"] == 3 + v.HUMAN_REST_SEED_OFFSET == 6
+    assert saved["human_rest_sheet_sha256"] == hashlib.sha256(sheet.read_bytes()).hexdigest()
+    assert saved["human_rest_text_sha256"] == {
+        d: hashlib.sha256((tmp_path / "a" / "text" / f"{d}.json").read_bytes()).hexdigest() for d in rest}
+    assert saved["human_rest_basis"] == {"llm_accepted_as_annotator": False, "kappa": 0.41, "scored_at": SCORED_AT}
+    assert datetime.fromisoformat(saved["human_rest_created_at"]).tzinfo is not None
+
+    # Same inputs elsewhere -> byte-identical sheet (seeded).
+    rest_work_dir(tmp_path / "b")
+    v.make_human_rest_sheet(tmp_path / "b", out=lambda _: None)
+    assert rest_paths(tmp_path / "b")[0].read_bytes() == sheet.read_bytes()
+
+
+def test_human_rest_sheet_snapshot_guard(tmp_path: Path) -> None:
+    rest_work_dir(tmp_path)
+    key = v.make_human_rest_sheet(tmp_path, out=lambda _: None)
+    sheet, key_path = rest_paths(tmp_path)
+    original = sheet.read_bytes()
+
+    printed: list[str] = []
+    v.make_human_rest_sheet(tmp_path, out=printed.append)  # rerun: no-op
+    assert sheet.read_bytes() == original and printed == [f"{sheet} already written; unchanged"]
+
+    filled = original.replace(b",,,,,\r\n", b",yes,no,302,yes,\r\n", 1)  # annotator filled it in
+    sheet.write_bytes(filled)
+    v.make_human_rest_sheet(tmp_path, out=lambda _: None)  # never overwritten
+    assert sheet.read_bytes() == filled
+
+    sheet.unlink()  # lost before labelling: regenerated byte-identically from the same text
+    v.make_human_rest_sheet(tmp_path, out=lambda _: None)
+    assert sheet.read_bytes() == original
+
+    d = key["human_rest"][0]  # a later re-extraction must not change what the annotator sees
+    text = tmp_path / "text" / f"{d}.json"
+    text.write_text(json.dumps({**json.loads(text.read_text(encoding="utf-8")), "body": "RE-SPLIT"}), encoding="utf-8")
+    key_before = key_path.read_bytes()
+    with pytest.raises(ValueError, match="re-extracted"):
+        v.make_human_rest_sheet(tmp_path, out=lambda _: None)
+    assert sheet.read_bytes() == original and key_path.read_bytes() == key_before
+
+
+def test_human_rest_sheet_refuses_an_unrecorded_sheet(tmp_path: Path) -> None:
+    rest_work_dir(tmp_path)
+    sheet, _ = rest_paths(tmp_path)
+    sheet.write_text("item,doc_id\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not recorded in validation_key.json"):
+        v.make_human_rest_sheet(tmp_path, out=lambda _: None)
+    assert sheet.read_text(encoding="utf-8") == "item,doc_id\n"
+
+
+GUARD_CASES = [
+    ("missing", "validation_result.json not found"),
+    ({"llm_accepted_as_annotator": True, "agreement_llm_vs_human": {"in_scope": {"kappa": 0.8}},
+      "scored_at": SCORED_AT}, "only after kappa missed"),
+    ({"agreement_llm_vs_human": {"in_scope": {"kappa": 0.4}}, "scored_at": SCORED_AT}, "only after kappa missed"),
+    ({"llm_accepted_as_annotator": False, "agreement_llm_vs_human": {"in_scope": {"kappa": None}},
+      "scored_at": SCORED_AT}, "no kappa value"),
+    ({"llm_accepted_as_annotator": False, "agreement_llm_vs_human": {}, "scored_at": SCORED_AT}, "no kappa value"),
+    ({"llm_accepted_as_annotator": False, "agreement_llm_vs_human": {"in_scope": {"kappa": 0.4}}}, "no scored_at"),
+    ("no_subset", "no human_subset"),
+]
+
+
+@pytest.mark.parametrize("result, match", GUARD_CASES)
+def test_human_rest_sheet_protocol_guards(tmp_path: Path, result: object, match: str) -> None:
+    rest_work_dir(tmp_path)
+    sheet, key_path = rest_paths(tmp_path)
+    result_path = tmp_path / "validation" / "validation_result.json"
+    if result == "missing":
+        result_path.unlink()
+    elif result == "no_subset":
+        key = json.loads(key_path.read_text(encoding="utf-8"))
+        del key["human_subset"]
+        key_path.write_text(json.dumps(key), encoding="utf-8")
+    else:
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+    key_before = key_path.read_bytes()
+    with pytest.raises(ValueError, match=match):
+        v.make_human_rest_sheet(tmp_path, out=lambda _: None)
+    assert not sheet.exists() and key_path.read_bytes() == key_before
+
+
+def rest_key() -> dict:
+    """option_b_key plus a human_rest record as human-sheet-rest writes it."""
+    key = option_b_key()
+    rest = sorted(i["doc_id"] for i in key["sample"] if i["doc_id"] not in key["human_subset"])
+    return {**key, "human_rest": rest, "human_rest_seed": 4, "human_rest_created_at": "2026-11-27T11:00:00+00:00",
+            "human_rest_basis": {"llm_accepted_as_annotator": False, "kappa": 0.0, "scored_at": SCORED_AT}}
+
+
+def kappa_missed_labels() -> tuple[dict, dict, list]:
+    """LLM e*: yes, r*: no; blind human disagrees on e1 (no) and r1 (yes): kappa 0 on the 4."""
+    llm, human = option_b_labels()
+    human["e1"] = lab("no")
+    human["r1"] = lab("yes", sections="302")
+    log = [log_row("e1", "in_scope", "no", "yes", "no", "kept"), log_row("r1", "in_scope", "yes", "no", "yes", "kept")]
+    return llm, human, log
+
+
+def test_score_with_human_rest_uses_human_gold_for_all() -> None:
+    key = rest_key()
+    llm, human, log = kappa_missed_labels()
+    rest = {d: dict(llm[d]) for d in key["human_rest"]}
+    rest["r4"] = lab("no", split="no")  # one LLM-human disagreement on the 30 (split only)
+    result = v.score(key, llm, human, human, log, resamples=200, human_rest=rest)
+    assert result["agreement_llm_vs_human"]["in_scope"]["kappa"] == 0.0  # pre-registered 25 unchanged
+    assert result["llm_accepted_as_annotator"] is False and result["checks"]["kappa"] is False
+    assert result["gold_sources"] == {"adjudicated_human": 4, "human_rest": 6, "llm": 0, "unused_pending_human": 0}
+    # kappa over all 10: llm y5 n5, blind human y5 n5, 8 agree -> p_o 0.8, p_e 0.5 -> 0.6
+    all55 = result["agreement_llm_vs_human_all"]
+    assert all55["documents"] == 10
+    assert all55["in_scope"] == {"kappa": 0.6, "raw_agreement": 0.8}
+    assert all55["split_correct"]["raw_agreement"] == 0.9
+    assert result["human_rest_disagreements_llm_vs_human"] == {"in_scope": 0, "section_as_charge": 0,
+                                                               "split_correct": 1}
+    main = result["main"]
+    assert main["documents"] == 10
+    assert main["primary"]["per_stratum"]["explicit"] == {**main["primary"]["per_stratum"]["explicit"],
+                                                          "tp": 4, "fp": 1}  # e1: human no won
+    assert main["split"]["judged"] == 10 and main["split"]["accuracy"] == 0.9
+    assert result["sensitivity_human_25"]["documents"] == 4
+    assert result["sensitivity_blind_human_all"]["documents"] == 10
+    # Inclusion misses (weighted precision 0.8), split passes: separate verdicts.
+    assert result["checks"]["weighted_precision"] is False and result["checks"]["split_accuracy"] is True
+    assert result["verdict_inclusion"].startswith("NOT ACCEPTED") and "fresh 55" in result["verdict_inclusion"]
+    assert result["verdict_split"] == "ACCEPTED"
+    assert result["verdict"] == f"Inclusion {result['verdict_inclusion']}; split ACCEPTED"
+    assert result["accepted"] is False
+
+
+def test_score_with_human_rest_inclusion_accepted_split_not() -> None:
+    key = rest_key()
+    llm, human, log = kappa_missed_labels()
+    adopted = {**human, "e1": lab("yes", sections="302"), "r1": lab("no")}  # human adopts the LLM after reasons
+    log = [log_row("e1", "in_scope", "no", "yes", "yes", "LLM right"),
+           log_row("r1", "in_scope", "yes", "no", "no", "LLM right")]
+    rest = {d: dict(llm[d]) for d in key["human_rest"]}
+    rest["r3"], rest["r4"] = lab("no", split="no"), lab("no", split="no")
+    result = v.score(key, llm, human, adopted, log, resamples=200, human_rest=rest)
+    assert result["checks"] == {"kappa": False, "weighted_precision": True, "split_accuracy": False}
+    assert result["verdict_inclusion"] == "ACCEPTED"
+    assert result["verdict_split"].startswith("NOT ACCEPTED") and "split only" in result["verdict_split"]
+    assert "fresh 55" not in result["verdict_split"]
+    assert result["verdict"] == f"Inclusion ACCEPTED; split {result['verdict_split']}"
+    # Blind-human sensitivity uses the unadjudicated 25: e1 is no there.
+    blind = result["sensitivity_blind_human_all"]["primary"]["per_stratum"]["explicit"]
+    assert (blind["tp"], blind["fp"]) == (4, 1)
+
+
+def test_score_verdicts_without_human_rest() -> None:
+    key = option_b_key()
+    llm, human = option_b_labels()
+    accepted = v.score(key, llm, human, human, [], resamples=50)
+    assert (accepted["verdict"], accepted["verdict_inclusion"], accepted["verdict_split"]) == (
+        "ACCEPTED", "ACCEPTED", "ACCEPTED")
+    assert accepted["gold_sources"]["human_rest"] == 0 and accepted["agreement_llm_vs_human_all"] is None
+    llm2, human2, log = kappa_missed_labels()
+    incomplete = v.score(key, llm2, human2, human2, log, resamples=50)
+    assert incomplete["verdict"].startswith("INCOMPLETE")
+    assert incomplete["verdict_inclusion"] == incomplete["verdict_split"] == "INCOMPLETE"
+    assert incomplete["sensitivity_blind_human_all"] is None
+
+
+def test_score_human_rest_errors() -> None:
+    key = rest_key()
+    llm, human, log = kappa_missed_labels()
+    rest = {d: dict(llm[d]) for d in key["human_rest"]}
+    with pytest.raises(ValueError, match="missing.*r4"):
+        v.score(key, llm, human, human, log, resamples=10, human_rest={d: x for d, x in rest.items() if d != "r4"})
+    with pytest.raises(ValueError, match="unexpected.*e0"):
+        v.score(key, llm, human, human, log, resamples=10, human_rest={**rest, "e0": lab("yes")})
+    with pytest.raises(ValueError, match="no human_rest record"):
+        v.score(option_b_key(), llm, human, human, log, resamples=10, human_rest=rest)
+    with pytest.raises(ValueError, match="does not match the key's human_rest"):
+        v.score({**key, "human_rest": key["human_rest"][:-1] + ["e0"]}, llm, human, human, log, resamples=10,
+                human_rest=rest)
+    llm_ok, human_ok = option_b_labels()  # kappa met: the LLM labels are gold for the rest
+    with pytest.raises(ValueError, match="LLM was accepted"):
+        v.score(key, llm_ok, human_ok, human_ok, [], resamples=10, human_rest=rest)
+
+
+def test_report_states_the_30_and_the_clarification() -> None:
+    key = rest_key()
+    llm, human, log = kappa_missed_labels()
+    rest = {d: dict(llm[d]) for d in key["human_rest"]}
+    result = {**v.score(key, llm, human, human, log, resamples=50, human_rest=rest), "scored_at": "2026-11-28T09:00:00+00:00"}
+    report = v.render_report(result, key)
+    assert "Scored at 2026-11-28T09:00:00+00:00" in report
+    assert "κ on the pre-registered 4 was 0.0 (< 0.7)" in report
+    assert "a legally trained human then labelled the other 6 blind" in report
+    assert "sheet generated 2026-11-27T11:00:00+00:00, after the scoring run of 2026-11-27T10:00:00+00:00" in report
+    assert "These 6 were not adjudicated against the LLM" in report
+    assert "read the LLM's reasons for the 4" in report
+    assert "κ **0.6**" in report and "descriptive" in report
+    assert "4 adjudicated human, 6 blind human (labelled after κ missed), 0 LLM, 0 unused" in report
+    assert "Sensitivity analysis: blind human labels on all 10" in report
+    assert "All 10 (adjudicated human 4 + blind human 6)" in report
+    assert "Clarification of the protocol" in report and "split-only" in report
+    assert f"Inclusion: **{result['verdict_inclusion']}**" in report and "Split: **ACCEPTED**" in report
+    # Without the 30 the kappa-missed report stays provisional and has no such section.
+    plain = {**v.score(option_b_key(), llm, human, human, log, resamples=50)}
+    plain_report = v.render_report(plain, option_b_key())
+    assert "Provisional (25 only)" in plain_report and "INCOMPLETE" in plain_report
+    assert "labelled the other" not in plain_report and "Scored at NOT RECORDED" in plain_report
+
+
+def test_score_cli_writes_scored_at_and_otherwise_score_output(tmp_path: Path) -> None:
+    key = rest_key()
+    llm, human, log = kappa_missed_labels()
+    rest = {d: dict(llm[d]) for d in key["human_rest"]}
+    target = tmp_path / "validation"
+    target.mkdir()
+    (target / "validation_key.json").write_text(json.dumps(key), encoding="utf-8")
+    write_labels(tmp_path / "llm.csv", as_rows(llm))
+    write_labels(tmp_path / "human.csv", as_rows(human))
+    write_labels(tmp_path / "adj.csv", as_rows(human))
+    write_labels(tmp_path / "rest.csv", as_rows(rest))
+    with (tmp_path / "log.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=v.LOG_COLUMNS)
+        w.writeheader()
+        w.writerows(log)
+    before = datetime.now(timezone.utc).replace(microsecond=0)
+    assert v.main(["--work-dir", str(tmp_path), "score", "--llm", str(tmp_path / "llm.csv"), "--human",
+                   str(tmp_path / "human.csv"), "--adjudicated", str(tmp_path / "adj.csv"),
+                   "--log", str(tmp_path / "log.csv"), "--human-rest", str(tmp_path / "rest.csv")]) == 0
+    written = json.loads((target / "validation_result.json").read_text(encoding="utf-8"))
+    scored_at = datetime.fromisoformat(written.pop("scored_at"))
+    assert scored_at.utcoffset().total_seconds() == 0 and before <= scored_at <= datetime.now(timezone.utc)
+    direct = v.score(key, v.read_labels(tmp_path / "llm.csv"), v.read_labels(tmp_path / "human.csv"),
+                     v.read_labels(tmp_path / "adj.csv"), v.read_log(tmp_path / "log.csv"),
+                     human_rest=v.read_labels(tmp_path / "rest.csv"))
+    assert written == json.loads(json.dumps(direct))  # only scored_at was added
+    report = (target / "validation_report.md").read_text(encoding="utf-8")
+    assert f"Scored at {scored_at.isoformat()}" in report
